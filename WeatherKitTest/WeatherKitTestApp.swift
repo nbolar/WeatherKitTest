@@ -81,127 +81,331 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-struct SettingsView: View {
-    var body: some View {
-        Text("Settings")
-            .frame(width: 300, height: 200)
+// MARK: - Liquid Glass (macOS Tahoe 26) styling helpers
+private enum LiquidGlassTokens {
+    static let panelCorner: CGFloat = 26
+    static let cardCorner: CGFloat = 18
+    static let strokeOpacity: Double = 0.16
+    static let innerGlowOpacity: Double = 0.10
+    static let panelWidth: CGFloat = 340
+    static let panelHeight: CGFloat = 700
+}
+
+private struct LiquidGlassCard: ViewModifier {
+    var cornerRadius: CGFloat = LiquidGlassTokens.cardCorner
+
+    func body(content: Content) -> some View {
+        Group {
+            if #available(macOS 26.0, *) {
+                content
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            } else {
+                content
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(LiquidGlassTokens.strokeOpacity), lineWidth: 0.75)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(LiquidGlassTokens.innerGlowOpacity),
+                            Color.white.opacity(0.0)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .blendMode(.screen)
+                .opacity(0.9)
+                .allowsHitTesting(false)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 18, x: 0, y: 10)
     }
 }
 
-struct InAppSettingsView: View {
-    @Binding var isPresented: Bool
-    @ObservedObject var viewModel: WeatherViewModel
+private extension View {
+    func liquidGlassCard(cornerRadius: CGFloat = LiquidGlassTokens.cardCorner) -> some View {
+        self.modifier(LiquidGlassCard(cornerRadius: cornerRadius))
+    }
+}
+
+private struct LiquidGlassPanelBackground: ViewModifier {
+    func body(content: Content) -> some View {
+        Group {
+            if #available(macOS 26.0, *) {
+                content
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: LiquidGlassTokens.panelCorner, style: .continuous))
+            } else {
+                content
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: LiquidGlassTokens.panelCorner, style: .continuous))
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: LiquidGlassTokens.panelCorner, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 26, x: -8, y: 14)
+    }
+}
+
+private extension View {
+    func liquidGlassPanel() -> some View {
+        self.modifier(LiquidGlassPanelBackground())
+    }
+}
+
+private struct LiquidGlassSection<Content: View>: View {
+    let title: String
+    let subtitle: String?
+    @ViewBuilder var content: Content
+
+    init(_ title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            content
+        }
+        .frame(maxWidth: .infinity)
+        .padding(14)
+        .liquidGlassCard()
+    }
+}
+
+// MARK: - Settings (System Settings scene)
+struct SettingsView: View {
     @AppStorage("refreshIntervalMinutes") private var refreshIntervalMinutes: Int = 30
     @AppStorage("useCelsius") private var useCelsius: Bool = false
     private let options = [5, 10, 15, 30, 60, 120, 180]
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                Text("Settings")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                Spacer()
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        isPresented = false
-                    }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: "gearshape.fill")
+                    .font(.title3)
+                    .symbolRenderingMode(.hierarchical)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Settings")
+                        .font(.title2.weight(.semibold))
+                    Text("Personalize units and refresh behavior.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
-                .help("Close")
-            }
-            .padding()
-            .background(Color(NSColor.controlBackgroundColor))
-            
-            Divider()
-            
-            // Settings Content
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Temperature Unit")
-                        .font(.headline)
-                    
-                    Picker("", selection: $useCelsius) {
-                        Text("Fahrenheit (°F)").tag(false)
-                        Text("Celsius (°C)").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: useCelsius) { _ in
-                        viewModel.refreshCurrentWeather()
-                    }
-                    
-                    Text("Choose your preferred temperature unit.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Divider()
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Auto-Refresh Interval")
-                        .font(.headline)
-                    
-                    Picker("Refresh every", selection: $refreshIntervalMinutes) {
-                        ForEach(options, id: \.self) { minutes in
-                            if minutes < 60 {
-                                Text("\(minutes) minutes").tag(minutes)
-                            } else {
-                                let hours = minutes / 60
-                                Text("\(hours) \(hours == 1 ? "hour" : "hours")").tag(minutes)
-                            }
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    
-                    Text("Weather data will refresh automatically at this interval.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Divider()
-                
-                // Manual refresh button
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Manual Refresh")
-                        .font(.headline)
-                    
-                    Button {
-                        viewModel.manualRefresh()
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            isPresented = false
-                        }
-                    } label: {
-                        HStack {
-                            Image(systemName: "arrow.clockwise")
-                            Text("Refresh Now")
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    
-                    Text("Fetch the latest weather data immediately.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Divider()
-                
 
-                
                 Spacer()
             }
-            .padding()
+
+            LiquidGlassSection("Temperature", subtitle: "Choose your preferred unit.") {
+                Picker("", selection: $useCelsius) {
+                    Text("Fahrenheit (°F)").tag(false)
+                    Text("Celsius (°C)").tag(true)
+                }
+                .pickerStyle(.segmented)
+            }
+
+            LiquidGlassSection("Auto‑Refresh", subtitle: "Refresh weather data automatically.") {
+                Picker("Refresh every", selection: $refreshIntervalMinutes) {
+                    ForEach(options, id: \.self) { minutes in
+                        if minutes < 60 {
+                            Text("\(minutes) minutes").tag(minutes)
+                        } else {
+                            let hours = minutes / 60
+                            Text("\(hours) \(hours == 1 ? "hour" : "hours")").tag(minutes)
+                        }
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Spacer(minLength: 4)
         }
-        .frame(width: 300, height: 700)
-        .background(Color(NSColor.windowBackgroundColor))
-        .cornerRadius(0)
-        .shadow(color: .black.opacity(0.2), radius: 10, x: -5, y: 0)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+        .padding(16)
+        .frame(width: 420, height: 460, alignment: .topLeading)
+        .liquidGlassPanel()
+        .padding(16)
+    }
+}
+
+// MARK: - In-app Settings Panel (Liquid Glass redesign)
+struct InAppSettingsView: View {
+    @Binding var isPresented: Bool
+    @ObservedObject var viewModel: WeatherViewModel
+
+    @AppStorage("refreshIntervalMinutes") private var refreshIntervalMinutes: Int = 30
+    @AppStorage("useCelsius") private var useCelsius: Bool = false
+    private let options = [5, 10, 15, 30, 60, 120, 180]
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+        var body: some View {
+        ZStack(alignment: .topTrailing) {
+            // Panel content
+            VStack(alignment: .leading, spacing: 14) {
+                header
+
+                VStack(alignment: .leading, spacing: 12) {
+                    LiquidGlassSection("Temperature", subtitle: "Choose your preferred unit.") {
+                        Picker("", selection: $useCelsius) {
+                            Text("Fahrenheit (°F)").tag(false)
+                            Text("Celsius (°C)").tag(true)
+                        }
+                        .padding(.horizontal, -8)
+                        .pickerStyle(.segmented)
+                        .onChange(of: useCelsius) { _ in
+                            viewModel.refreshCurrentWeather()
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        
+                    }
+                    
+
+                    LiquidGlassSection("Auto‑Refresh", subtitle: "Refresh weather data automatically.") {
+                        Picker("Refresh every", selection: $refreshIntervalMinutes) {
+                            ForEach(options, id: \.self) { minutes in
+                                if minutes < 60 {
+                                    Text("\(minutes) minutes").tag(minutes)
+                                } else {
+                                    let hours = minutes / 60
+                                    Text("\(hours) \(hours == 1 ? "hour" : "hours")").tag(minutes)
+                                }
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    LiquidGlassSection("Manual Refresh", subtitle: "Fetch the latest weather data immediately.") {
+                        Button {
+                            viewModel.manualRefresh()
+                            dismiss()
+                        } label: {
+                            Label("Refresh Now", systemImage: "arrow.clockwise")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.white.opacity(0.20))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.top, 6)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 14)
+            }
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+            .frame(width: LiquidGlassTokens.panelWidth, alignment: .topLeading)
+            .liquidGlassPanel()
+            .overlay(panelChromeOverlay)
+
+            // Close button floats slightly above, like Tahoe sheets/panels.
+            closeButton
+                .padding(10)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
+        .padding(.top, 12)
+        .padding(.trailing, 12)
+        }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.14))
+                    .frame(width: 34, height: 34)
+
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.primary.opacity(0.92))
+            }
+            .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Settings")
+                    .font(.title3.weight(.semibold))
+                Text("Customize your Weather popover.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 2)
+    }
+
+    private var closeButton: some View {
+        Button {
+            dismiss()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.primary.opacity(0.9))
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background {
+            if #available(macOS 26.0, *) {
+                // A small, high-clarity glass "chip" like system controls.
+                Color.clear
+                    .padding(0)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } else {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 0.75)
+        )
+        .shadow(color: .black.opacity(0.25), radius: 10, x: 0, y: 6)
+        .help("Close")
+        .accessibilityLabel("Close settings")
+    }
+
+    private var panelChromeOverlay: some View {
+        // A subtle top highlight to separate the panel from busy backgrounds.
+        RoundedRectangle(cornerRadius: LiquidGlassTokens.panelCorner, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.14),
+                        Color.white.opacity(0.0)
+                    ],
+                    startPoint: .top,
+                    endPoint: .center
+                )
+            )
+            .blendMode(.screen)
+            .allowsHitTesting(false)
+    }
+
+    private func dismiss() {
+        withAnimation(reduceMotion ? .easeOut(duration: 0.18) : .spring(response: 0.34, dampingFraction: 0.86)) {
+            isPresented = false
+        }
     }
 }
 
@@ -249,7 +453,7 @@ struct ContentView: View {
                     }
                 
                 InAppSettingsView(isPresented: $showSettings, viewModel: viewModel)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .transition(.move(edge: .top).combined(with: .opacity))
                     .zIndex(3)
             }
         }
