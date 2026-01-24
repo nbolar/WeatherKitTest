@@ -6,15 +6,20 @@ import MapKit
 import AppKit
 import WebKit
 import Charts
+import ServiceManagement
+
+@inline(__always)
+private func quitApp() {
+    NSApplication.shared.terminate(nil) // no confirmation
+}
+
 
 @main
 struct WeatherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     
     var body: some Scene {
-        Settings {
-            SettingsView()
-        }
+//        ContentView()
     }
 }
 
@@ -81,6 +86,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// MARK: - Launch at Login Manager
+@available(macOS 13.0, *)
+class LaunchAtLoginManager: ObservableObject {
+    static let shared = LaunchAtLoginManager()
+    
+    @Published var isEnabled: Bool = false
+    
+    private init() {
+        updateStatus()
+    }
+    
+    func updateStatus() {
+        isEnabled = SMAppService.mainApp.status == .enabled
+    }
+    
+    func toggle() {
+        do {
+            if isEnabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+            updateStatus()
+        } catch {
+            print("Failed to \(isEnabled ? "unregister" : "register") launch at login: \(error.localizedDescription)")
+        }
+    }
+    
+    func enable() {
+        guard !isEnabled else { return }
+        toggle()
+    }
+    
+    func disable() {
+        guard isEnabled else { return }
+        toggle()
+    }
+}
+
 // MARK: - Liquid Glass (macOS Tahoe 26) styling helpers
 private enum LiquidGlassTokens {
     static let panelCorner: CGFloat = 26
@@ -88,7 +132,7 @@ private enum LiquidGlassTokens {
     static let strokeOpacity: Double = 0.16
     static let innerGlowOpacity: Double = 0.10
     static let panelWidth: CGFloat = 340
-    static let panelHeight: CGFloat = 700
+    static let panelHeight: CGFloat = 600
 }
 
 private struct LiquidGlassCard: ViewModifier {
@@ -191,61 +235,6 @@ private struct LiquidGlassSection<Content: View>: View {
     }
 }
 
-// MARK: - Settings (System Settings scene)
-struct SettingsView: View {
-    @AppStorage("refreshIntervalMinutes") private var refreshIntervalMinutes: Int = 30
-    @AppStorage("useCelsius") private var useCelsius: Bool = false
-    private let options = [5, 10, 15, 30, 60, 120, 180]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 10) {
-                Image(systemName: "gearshape.fill")
-                    .font(.title3)
-                    .symbolRenderingMode(.hierarchical)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Settings")
-                        .font(.title2.weight(.semibold))
-                    Text("Personalize units and refresh behavior.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-            }
-
-            LiquidGlassSection("Temperature", subtitle: "Choose your preferred unit.") {
-                Picker("", selection: $useCelsius) {
-                    Text("Fahrenheit (°F)").tag(false)
-                    Text("Celsius (°C)").tag(true)
-                }
-                .pickerStyle(.segmented)
-            }
-
-            LiquidGlassSection("Auto‑Refresh", subtitle: "Refresh weather data automatically.") {
-                Picker("Refresh every", selection: $refreshIntervalMinutes) {
-                    ForEach(options, id: \.self) { minutes in
-                        if minutes < 60 {
-                            Text("\(minutes) minutes").tag(minutes)
-                        } else {
-                            let hours = minutes / 60
-                            Text("\(hours) \(hours == 1 ? "hour" : "hours")").tag(minutes)
-                        }
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            Spacer(minLength: 4)
-        }
-        .padding(16)
-        .frame(width: 420, height: 460, alignment: .topLeading)
-        .liquidGlassPanel()
-        .padding(16)
-    }
-}
 
 // MARK: - In-app Settings Panel (Liquid Glass redesign)
 struct InAppSettingsView: View {
@@ -255,6 +244,18 @@ struct InAppSettingsView: View {
     @AppStorage("refreshIntervalMinutes") private var refreshIntervalMinutes: Int = 30
     @AppStorage("useCelsius") private var useCelsius: Bool = false
     private let options = [5, 10, 15, 30, 60, 120, 180]
+    
+    @StateObject private var launchManager: LaunchAtLoginManager
+    
+    init(isPresented: Binding<Bool>, viewModel: WeatherViewModel) {
+        self._isPresented = isPresented
+        self.viewModel = viewModel
+        if #available(macOS 13.0, *) {
+            _launchManager = StateObject(wrappedValue: LaunchAtLoginManager.shared)
+        } else {
+            _launchManager = StateObject(wrappedValue: LaunchAtLoginManager.shared)
+        }
+    }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
         var body: some View {
@@ -306,17 +307,48 @@ struct InAppSettingsView: View {
                         .tint(.white.opacity(0.20))
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                }
+                    
+                    HStack() {
+                        if #available(macOS 13.0, *) {
+                            LiquidGlassSection("Launch at Login", subtitle: "Automatically start the app when you log in.") {
+                                Toggle(isOn: Binding(
+                                    get: { launchManager.isEnabled },
+                                    set: { _ in launchManager.toggle() }
+                                )) {
+                                    Text("Open at login")
+                                }
+                                .toggleStyle(.switch)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        Spacer()
+                        LiquidGlassSection("Quit App", subtitle: "Close WeatherKitTest.") {
+                            Button {
+                                quitApp()
+                            } label: {
+                                Label("Quit", systemImage: "xmark.circle")
+                                    .labelStyle(.titleOnly)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.white.opacity(0.20))
+                            .frame(maxWidth: .infinity, maxHeight: 115, alignment: .center)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: 115,alignment: .leading)
+                    }
+                    }
                 .padding(.top, 6)
                 .padding(.horizontal, 14)
                 .padding(.bottom, 14)
+
             }
             .padding(.top, 14)
             .padding(.bottom, 10)
             .frame(width: LiquidGlassTokens.panelWidth, alignment: .topLeading)
             .liquidGlassPanel()
             .overlay(panelChromeOverlay)
-
+            .contentShape(RoundedRectangle(cornerRadius: LiquidGlassTokens.panelCorner, style: .continuous))
+            .onTapGesture {}
             // Close button floats slightly above, like Tahoe sheets/panels.
             closeButton
                 .padding(10)
@@ -324,6 +356,11 @@ struct InAppSettingsView: View {
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.top, 12)
         .padding(.trailing, 12)
+        .onAppear {
+            if #available(macOS 13.0, *) {
+                launchManager.updateStatus()
+            }
+        }
         }
 
     private var header: some View {
@@ -331,7 +368,7 @@ struct InAppSettingsView: View {
             ZStack {
                 Circle()
                     .fill(Color.white.opacity(0.14))
-                    .frame(width: 34, height: 34)
+                    .frame(width: 30, height: 30)
 
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 15, weight: .semibold))
@@ -343,9 +380,6 @@ struct InAppSettingsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Settings")
                     .font(.title3.weight(.semibold))
-                Text("Customize your Weather popover.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             Spacer()
@@ -355,35 +389,28 @@ struct InAppSettingsView: View {
     }
 
     private var closeButton: some View {
+        
         Button {
             dismiss()
         } label: {
-            Image(systemName: "xmark")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(.primary.opacity(0.9))
-                .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.14))
+                    .frame(width: 28, height: 28)
+
+                Image(systemName: "xmark")
+                    .font(.system(size: 15, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.primary.opacity(0.92))
+            }
+            .accessibilityHidden(true)
+
         }
         .buttonStyle(.plain)
-        .background {
-            if #available(macOS 26.0, *) {
-                // A small, high-clarity glass "chip" like system controls.
-                Color.clear
-                    .padding(0)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            } else {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            }
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.white.opacity(0.18), lineWidth: 0.75)
-        )
-        .shadow(color: .black.opacity(0.25), radius: 10, x: 0, y: 6)
-        .help("Close")
-        .accessibilityLabel("Close settings")
+        .padding(.horizontal, 7)
+        .padding(.top, 5)
     }
+
 
     private var panelChromeOverlay: some View {
         // A subtle top highlight to separate the panel from busy backgrounds.
@@ -860,8 +887,8 @@ struct WeatherBackdropView: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color.black.opacity(weather.isDaylight ? 0.10 : 0.28),
-                            Color.black.opacity(weather.isDaylight ? 0.22 : 0.40)
+                            Color.black.opacity(weather.isDaylight ? 0.05 : 0.28),
+                            Color.black.opacity(weather.isDaylight ? 0.15 : 0.40)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -882,7 +909,12 @@ struct WeatherBackdropView: View {
 
     private var depthColors: [Color] {
         if weather.isDaylight {
-            return [Color.white.opacity(0.14), Color.cyan.opacity(0.10), Color.white.opacity(0.08)]
+            // Enhanced depth colors for sunny days with more vibrant overlays
+            return [
+                Color(red: 1.0, green: 0.95, blue: 0.85).opacity(0.22),
+                Color(red: 0.90, green: 0.85, blue: 0.95).opacity(0.18),
+                Color(red: 1.0, green: 0.92, blue: 0.80).opacity(0.15)
+            ]
         } else {
             return [Color.white.opacity(0.10), Color.purple.opacity(0.12), Color.white.opacity(0.06)]
         }
@@ -927,16 +959,36 @@ struct WeatherBackdropView: View {
             }
         }
 
-        // Day palette (your existing logic, tuned slightly for depth and consistency)
+        // Day palette - VIBRANT sunny skies with dramatic, noticeable colors
         if condition.contains("clear") || condition.contains("sunny") {
             if temp > 85 {
-                return [Color.orange.opacity(0.70), Color.yellow.opacity(0.45), Color.orange.opacity(0.38)]
+                // Hot sunny day - INTENSE warm golden/orange sky
+                return [
+                    Color(red: 1.0, green: 0.60, blue: 0.15),  // Deep warm orange top
+                    Color(red: 1.0, green: 0.82, blue: 0.35),  // Bright golden middle
+                    Color(red: 0.98, green: 0.92, blue: 0.60)  // Soft golden-cream bottom
+                ]
             } else if temp > 70 {
-                return [Color.blue.opacity(0.58), Color.cyan.opacity(0.38), Color.yellow.opacity(0.26)]
+                // Pleasant sunny day - VIBRANT azure blue with golden horizon
+                return [
+                    Color(red: 0.20, green: 0.55, blue: 0.98),  // Deep azure blue top
+                    Color(red: 0.40, green: 0.75, blue: 1.0),   // Bright sky blue middle
+                    Color(red: 0.95, green: 0.88, blue: 0.50)   // Golden-yellow horizon
+                ]
             } else if temp > 50 {
-                return [Color.blue.opacity(0.52), Color.cyan.opacity(0.36), Color.blue.opacity(0.30)]
+                // Mild sunny day - CRISP bright blue sky
+                return [
+                    Color(red: 0.15, green: 0.50, blue: 0.95),  // Rich sky blue top
+                    Color(red: 0.35, green: 0.70, blue: 1.0),   // Brilliant cyan middle
+                    Color(red: 0.60, green: 0.85, blue: 0.98)   // Light cyan-blue horizon
+                ]
             } else {
-                return [Color.blue.opacity(0.58), Color.purple.opacity(0.34), Color.blue.opacity(0.48)]
+                // Cool sunny day - VIVID cool blue with purple accents
+                return [
+                    Color(red: 0.25, green: 0.45, blue: 0.90),  // Deep cool blue top
+                    Color(red: 0.45, green: 0.60, blue: 0.95),  // Bright periwinkle middle
+                    Color(red: 0.55, green: 0.75, blue: 0.98)   // Cool cyan-blue bottom
+                ]
             }
         } else if condition.contains("cloud") {
             if temp > 70 {
@@ -962,16 +1014,24 @@ struct WeatherBackdropView: View {
         let condition = weather.condition.description.lowercased()
         let isDay = weather.isDaylight
 
-        // Night gets stars + a soft glow, on top of condition-specific effects.
+        // Night gets stars + either moon (clear) or subtle glow (other conditions)
         if !isDay {
             StarsEffect()
-            NightGlowEffect()
+            ShootingStarsEffect()
+            // Show moon with rays on clear nights, otherwise just a subtle glow
+            if condition.contains("clear") || condition.contains("sunny") {
+                MoonRaysEffect()
+            } else {
+                NightGlowEffect()
+            }
         }
 
         if condition.contains("storm") || condition.contains("thunder") {
             // Lightning + optional rain gives the right drama.
             LightningEffect(intensity: isDay ? 0.9 : 1.0)
             RainEffect()
+        } else if condition.contains("drizzle") {
+            DrizzleEffect()
         } else if condition.contains("rain") {
             RainEffect()
         } else if condition.contains("snow") {
@@ -1009,8 +1069,8 @@ struct StarsEffect: View {
                 Circle()
                     .fill(Color.white)
                     .frame(width: star.size, height: star.size)
-                    .opacity(star.baseOpacity + (reduceMotion ? 0 : 0.25 * (0.5 + 0.5 * sin(twinklePhase / star.twinkleSpeed + star.delay))))
-                    .blur(radius: star.size > 2.2 ? 0.2 : 0)
+                    .opacity(calculateTwinkle(for: star))
+                    .blur(radius: star.size > 2.2 ? 0.3 : 0.2)
                     .offset(x: star.x, y: star.y)
             }
         }
@@ -1025,18 +1085,31 @@ struct StarsEffect: View {
                         x: CGFloat.random(in: -260...260),
                         y: CGFloat.random(in: -420...50),
                         size: CGFloat.random(in: 1.0...2.8),
-                        baseOpacity: Double.random(in: 0.15...0.45),
-                        twinkleSpeed: Double.random(in: 0.8...1.8),
-                        delay: Double.random(in: 0...6)
+                        baseOpacity: Double.random(in: 0.20...0.50),
+                        twinkleSpeed: Double.random(in: 1.0...2.5),
+                        delay: Double.random(in: 0...10)
                     )
                 }
             }
 
             guard !reduceMotion else { return }
-            withAnimation(.linear(duration: 10).repeatForever(autoreverses: false)) {
+            withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) {
                 twinklePhase = 100
             }
         }
+    }
+    
+    private func calculateTwinkle(for star: Star) -> Double {
+        if reduceMotion {
+            return star.baseOpacity
+        }
+        
+        // Create a more pronounced twinkling effect with sine wave
+        let sineValue = sin((twinklePhase / star.twinkleSpeed) + star.delay)
+        let twinkleAmount = 0.55 * sineValue // Increased from 0.25 for more visible twinkling
+        
+        // Ensure opacity stays within valid range
+        return min(max(star.baseOpacity + twinkleAmount, 0.1), 1.0)
     }
 }
 
@@ -1069,6 +1142,121 @@ struct NightGlowEffect: View {
                     pulse = 0.55
                 }
             }
+    }
+}
+
+struct ShootingStarsEffect: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shootingStars: [ShootingStar] = []
+    
+    fileprivate struct ShootingStar: Identifiable {
+        let id: UUID
+        var x: CGFloat
+        var y: CGFloat
+        let angle: Double
+        let length: CGFloat
+        let speed: Double
+        var opacity: Double
+        var isActive: Bool
+    }
+    
+    var body: some View {
+        ZStack {
+            ForEach(shootingStars) { star in
+                if star.isActive {
+                    ShootingStarView(star: star)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            guard !reduceMotion else { return }
+            scheduleShootingStar()
+        }
+    }
+    
+    private func scheduleShootingStar() {
+        guard !reduceMotion else { return }
+        
+        // Random delay between shooting stars (5-15 seconds)
+        let delay = Double.random(in: 5...15)
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            createShootingStar()
+            scheduleShootingStar() // Schedule the next one
+        }
+    }
+    
+    private func createShootingStar() {
+        let newStar = ShootingStar(
+            id: UUID(),
+            x: CGFloat.random(in: -200...100),
+            y: CGFloat.random(in: -350...(-200)),
+            angle: Double.random(in: 25...65), // Diagonal angle
+            length: CGFloat.random(in: 40...80),
+            speed: Double.random(in: 0.6...1.2),
+            opacity: 1.0,
+            isActive: true
+        )
+        
+        shootingStars.append(newStar)
+        
+        // Remove after animation completes
+        DispatchQueue.main.asyncAfter(deadline: .now() + newStar.speed + 0.5) {
+            shootingStars.removeAll { $0.id == newStar.id }
+        }
+    }
+}
+
+fileprivate struct ShootingStarView: View {
+    let star: ShootingStarsEffect.ShootingStar
+    @State private var offset: CGFloat = 0
+    @State private var opacity: Double = 0
+    
+    var body: some View {
+        ZStack(alignment: .leading) {
+            // Tail
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.8),
+                    Color.white.opacity(0.4),
+                    Color.white.opacity(0.0)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(width: star.length, height: 1.5)
+            .blur(radius: 0.8)
+            
+            // Bright head
+            Circle()
+                .fill(Color.white)
+                .frame(width: 3, height: 3)
+                .blur(radius: 0.5)
+        }
+        .rotationEffect(.degrees(-star.angle))
+        .opacity(opacity)
+        .offset(x: star.x + offset * cos(star.angle * .pi / 180),
+                y: star.y + offset * sin(star.angle * .pi / 180))
+        .blendMode(.screen)
+        .onAppear {
+            // Fade in quickly
+            withAnimation(.easeIn(duration: 0.1)) {
+                opacity = 1.0
+            }
+            
+            // Move across the sky
+            withAnimation(.linear(duration: star.speed)) {
+                offset = 400
+            }
+            
+            // Fade out toward the end
+            DispatchQueue.main.asyncAfter(deadline: .now() + star.speed * 0.7) {
+                withAnimation(.easeOut(duration: star.speed * 0.3)) {
+                    opacity = 0
+                }
+            }
+        }
     }
 }
 
@@ -1165,48 +1353,72 @@ struct SunRaysEffect: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var rotation: Double = 0
     @State private var shimmer: Double = 0
+    @State private var pulsePhase: Double = 0
+    @State private var secondaryRotation: Double = 0
 
     var body: some View {
         ZStack {
-            // Sun core + warm halo
+            // Sun core with enhanced realistic glow
             Circle()
                 .fill(
                     RadialGradient(
                         colors: [
-                            Color.white.opacity(0.55),
-                            Color.yellow.opacity(0.35),
-                            Color.orange.opacity(0.22),
+                            Color(red: 1.0, green: 0.98, blue: 0.92).opacity(0.85), // Bright warm white
+                            Color(red: 1.0, green: 0.92, blue: 0.65).opacity(0.65), // Soft yellow
+                            Color(red: 1.0, green: 0.78, blue: 0.45).opacity(0.48), // Golden
+                            Color(red: 1.0, green: 0.65, blue: 0.35).opacity(0.28), // Warm orange
                             Color.clear
                         ],
                         center: .center,
                         startRadius: 0,
-                        endRadius: 220
+                        endRadius: 240
                     )
                 )
-                .frame(width: 420, height: 420)
+                .frame(width: 460, height: 460)
                 .offset(x: 140, y: -260)
-                .blur(radius: 18)
-                .opacity(0.95)
+                .blur(radius: 12)
+                .opacity(0.92 + pulsePhase * 0.08)
 
-            // Soft ray disc (masked so it fades naturally)
+            // Inner corona - intense bright ring
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(red: 1.0, green: 0.95, blue: 0.85).opacity(0.75),
+                            Color(red: 1.0, green: 0.85, blue: 0.50).opacity(0.45),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 100,
+                        endRadius: 200
+                    )
+                )
+                .frame(width: 400, height: 400)
+                .offset(x: 140, y: -260)
+                .blur(radius: 8)
+                .opacity(0.85)
+                .blendMode(.screen)
+
+            // Primary rays - longer, more defined
             GeometryReader { geometry in
                 ZStack {
-                    ForEach(0..<24, id: \.self) { index in
-                        Rectangle()
+                    ForEach(0..<12, id: \.self) { index in
+                        RayShape(tapering: 0.6)
                             .fill(
                                 LinearGradient(
                                     colors: [
-                                        Color.yellow.opacity(0.25),
-                                        Color.orange.opacity(0.12),
+                                        Color(red: 1.0, green: 0.95, blue: 0.75).opacity(0.45),
+                                        Color(red: 1.0, green: 0.85, blue: 0.55).opacity(0.32),
+                                        Color(red: 1.0, green: 0.75, blue: 0.45).opacity(0.18),
                                         Color.clear
                                     ],
                                     startPoint: .leading,
                                     endPoint: .trailing
                                 )
                             )
-                            .frame(width: 600, height: 8)
-                            .blur(radius: 18)
-                            .rotationEffect(.degrees(Double(index) * 15))
+                            .frame(width: 700, height: 14)
+                            .blur(radius: 12)
+                            .rotationEffect(.degrees(Double(index) * 30))
                     }
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
@@ -1216,12 +1428,422 @@ struct SunRaysEffect: View {
                     RadialGradient(
                         colors: [
                             Color.clear,
-                            Color.white.opacity(0.9),
+                            Color.white.opacity(0.3),
+                            Color.white.opacity(0.95),
+                            Color.white.opacity(0.6),
                             Color.clear
                         ],
                         center: UnitPoint(x: (geometry.size.width / 2 + 140) / geometry.size.width,
                                         y: (-260 + geometry.size.height / 2) / geometry.size.height),
-                        startRadius: 120,
+                        startRadius: 140,
+                        endRadius: 580
+                    )
+                )
+                .opacity(0.75)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+
+            // Secondary rays - offset rotation for depth
+            GeometryReader { geometry in
+                ZStack {
+                    ForEach(0..<16, id: \.self) { index in
+                        RayShape(tapering: 0.75)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 1.0, green: 0.90, blue: 0.70).opacity(0.28),
+                                        Color(red: 1.0, green: 0.80, blue: 0.55).opacity(0.18),
+                                        Color.clear
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: 650, height: 9)
+                            .blur(radius: 16)
+                            .rotationEffect(.degrees(Double(index) * 22.5))
+                    }
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .position(x: geometry.size.width / 2 + 140, y: -260 + geometry.size.height / 2)
+                .rotationEffect(.degrees(secondaryRotation))
+                .mask(
+                    RadialGradient(
+                        colors: [
+                            Color.clear,
+                            Color.white.opacity(0.85),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: (geometry.size.width / 2 + 140) / geometry.size.width,
+                                        y: (-260 + geometry.size.height / 2) / geometry.size.height),
+                        startRadius: 160,
+                        endRadius: 520
+                    )
+                )
+                .opacity(0.55)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+
+            // God rays / volumetric light beams
+            GeometryReader { geometry in
+                ZStack {
+                    ForEach(0..<8, id: \.self) { index in
+                        Rectangle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 1.0, green: 0.92, blue: 0.70).opacity(0.20),
+                                        Color(red: 1.0, green: 0.85, blue: 0.60).opacity(0.12),
+                                        Color(red: 1.0, green: 0.75, blue: 0.50).opacity(0.06),
+                                        Color.clear
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: 800, height: 28)
+                            .blur(radius: 25)
+                            .rotationEffect(.degrees(Double(index) * 45))
+                    }
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .position(x: geometry.size.width / 2 + 140, y: -260 + geometry.size.height / 2)
+                .rotationEffect(.degrees(rotation * 0.3))
+                .mask(
+                    RadialGradient(
+                        colors: [
+                            Color.clear,
+                            Color.white.opacity(0.7),
+                            Color.white.opacity(0.4),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: (geometry.size.width / 2 + 140) / geometry.size.width,
+                                        y: (-260 + geometry.size.height / 2) / geometry.size.height),
+                        startRadius: 180,
+                        endRadius: 600
+                    )
+                )
+                .opacity(0.45)
+                .blendMode(.screen)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+
+            // Enhanced sunlit motes with depth
+            if !reduceMotion {
+                SunnyMotesEffect()
+                    .opacity(0.55)
+                    .blendMode(.screen)
+            }
+
+            // Improved warm shimmer with realistic light dispersion
+            Rectangle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.clear,
+                            Color(red: 1.0, green: 0.90, blue: 0.65).opacity(0.15),
+                            Color(red: 1.0, green: 0.80, blue: 0.50).opacity(0.10),
+                            Color(red: 1.0, green: 0.70, blue: 0.40).opacity(0.05),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: 0.75, y: 0.15),
+                        startRadius: 50,
+                        endRadius: 550
+                    )
+                )
+                .opacity(0.28 + shimmer * 0.15)
+                .blendMode(.overlay)
+
+            // Subtle atmospheric scattering effect
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 1.0, green: 0.95, blue: 0.85).opacity(0.0),
+                            Color(red: 1.0, green: 0.88, blue: 0.70).opacity(0.08),
+                            Color(red: 0.85, green: 0.75, blue: 0.90).opacity(0.06),
+                            Color.clear
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .opacity(0.45)
+                .blendMode(.screen)
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            guard !reduceMotion else { return }
+            
+            // Slow, continuous ray rotation
+            withAnimation(.linear(duration: 200).repeatForever(autoreverses: false)) {
+                rotation = 360
+            }
+            
+            // Counter-rotation for depth effect
+            withAnimation(.linear(duration: 280).repeatForever(autoreverses: false)) {
+                secondaryRotation = -360
+            }
+            
+            // Gentle pulsing shimmer
+            withAnimation(.easeInOut(duration: 5.5).repeatForever(autoreverses: true)) {
+                shimmer = 1
+            }
+            
+            // Subtle pulse for sun core
+            withAnimation(.easeInOut(duration: 3.8).repeatForever(autoreverses: true)) {
+                pulsePhase = 1
+            }
+        }
+    }
+}
+
+// Custom ray shape with natural tapering
+struct RayShape: Shape {
+    var tapering: Double = 0.7
+    
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        
+        let height = rect.height
+        let width = rect.width
+        let taperPoint = width * tapering
+        
+        path.move(to: CGPoint(x: 0, y: height / 2))
+        path.addLine(to: CGPoint(x: taperPoint, y: 0))
+        path.addLine(to: CGPoint(x: width, y: height / 2))
+        path.addLine(to: CGPoint(x: taperPoint, y: height))
+        path.closeSubpath()
+        
+        return path
+    }
+}
+
+struct SunnyMotesEffect: View {
+    @State private var motes: [(id: Int, x: CGFloat, y: CGFloat, size: CGFloat, speed: Double, delay: Double, horizontalDrift: CGFloat)] = []
+
+    var body: some View {
+        ZStack {
+            ForEach(motes, id: \.id) { mote in
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                Color(red: 1.0, green: 0.95, blue: 0.85).opacity(0.95),
+                                Color(red: 1.0, green: 0.90, blue: 0.70).opacity(0.65),
+                                Color.clear
+                            ],
+                            center: .center,
+                            startRadius: 0,
+                            endRadius: mote.size / 2
+                        )
+                    )
+                    .frame(width: mote.size, height: mote.size)
+                    .blur(radius: 0.8)
+                    .offset(x: mote.x, y: mote.y)
+                    .modifier(EnhancedDriftUpModifier(
+                        speed: mote.speed,
+                        delay: mote.delay,
+                        horizontalDrift: mote.horizontalDrift
+                    ))
+            }
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            motes = (0..<75).map { i in
+                (
+                    id: i,
+                    x: CGFloat.random(in: -280...280),
+                    y: CGFloat.random(in: -140...340),
+                    size: CGFloat.random(in: 1.5...3.2),
+                    speed: Double.random(in: 8.5...15.0),
+                    delay: Double.random(in: 0...3.5),
+                    horizontalDrift: CGFloat.random(in: -35...35)
+                )
+            }
+        }
+    }
+}
+
+private struct EnhancedDriftUpModifier: ViewModifier {
+    let speed: Double
+    let delay: Double
+    let horizontalDrift: CGFloat
+    @State private var verticalOffset: CGFloat = 0
+    @State private var horizontalOffset: CGFloat = 0
+    @State private var opacity: Double = 0.0
+    @State private var scale: CGFloat = 0.6
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(opacity)
+            .scaleEffect(scale)
+            .offset(x: horizontalOffset, y: verticalOffset)
+            .onAppear {
+                // Fade in and scale up
+                withAnimation(.easeOut(duration: 1.5).delay(delay)) {
+                    opacity = 1.0
+                    scale = 1.0
+                }
+                
+                // Vertical drift upward with fade out near the end
+                withAnimation(.linear(duration: speed).delay(delay)) {
+                    verticalOffset = -280
+                }
+                
+                // Horizontal gentle sway
+                withAnimation(
+                    .easeInOut(duration: speed * 0.6)
+                    .repeatForever(autoreverses: true)
+                    .delay(delay)
+                ) {
+                    horizontalOffset = horizontalDrift
+                }
+                
+                // Fade out as it reaches the top
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay + speed * 0.75) {
+                    withAnimation(.easeIn(duration: speed * 0.25)) {
+                        opacity = 0.0
+                    }
+                }
+            }
+    }
+}
+
+// MARK: - Moon Effects for Night Time
+
+struct MoonRaysEffect: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var rotation: Double = 0
+    @State private var shimmer: Double = 0
+    @State private var pulsePhase: Double = 0
+    @State private var secondaryRotation: Double = 0
+
+    var body: some View {
+        ZStack {
+            // Moon core with soft silvery glow (reduced size)
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(red: 0.95, green: 0.98, blue: 1.0).opacity(0.85), // Soft bluish-white
+                            Color(red: 0.85, green: 0.90, blue: 0.98).opacity(0.65), // Cool silver
+                            Color(red: 0.75, green: 0.82, blue: 0.95).opacity(0.48), // Pale blue
+                            Color(red: 0.65, green: 0.75, blue: 0.92).opacity(0.28), // Deeper blue
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 140
+                    )
+                )
+                .frame(width: 280, height: 280)
+                .offset(x: 140, y: -260)
+                .blur(radius: 10)
+                .opacity(0.75 + pulsePhase * 0.08)
+
+            // Inner corona - soft moonlight ring (reduced size)
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(red: 0.92, green: 0.95, blue: 1.0).opacity(0.65),
+                            Color(red: 0.80, green: 0.88, blue: 0.98).opacity(0.40),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 60,
+                        endRadius: 120
+                    )
+                )
+                .frame(width: 240, height: 240)
+                .offset(x: 140, y: -260)
+                .blur(radius: 8)
+                .opacity(0.75)
+                .blendMode(.screen)
+
+            // Primary moonlight rays - softer and more ethereal than sun rays
+            GeometryReader { geometry in
+                ZStack {
+                    ForEach(0..<12, id: \.self) { index in
+                        RayShape(tapering: 0.6)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 0.85, green: 0.92, blue: 1.0).opacity(0.35),
+                                        Color(red: 0.75, green: 0.85, blue: 0.98).opacity(0.25),
+                                        Color(red: 0.65, green: 0.78, blue: 0.95).opacity(0.15),
+                                        Color.clear
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: 700, height: 12)
+                            .blur(radius: 14)
+                            .rotationEffect(.degrees(Double(index) * 30))
+                    }
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .position(x: geometry.size.width / 2 + 140, y: -260 + geometry.size.height / 2)
+                .rotationEffect(.degrees(rotation))
+                .mask(
+                    RadialGradient(
+                        colors: [
+                            Color.clear,
+                            Color.white.opacity(0.25),
+                            Color.white.opacity(0.85),
+                            Color.white.opacity(0.5),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: (geometry.size.width / 2 + 140) / geometry.size.width,
+                                        y: (-260 + geometry.size.height / 2) / geometry.size.height),
+                        startRadius: 140,
+                        endRadius: 580
+                    )
+                )
+                .opacity(0.65)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+
+            // Secondary rays - offset rotation for depth
+            GeometryReader { geometry in
+                ZStack {
+                    ForEach(0..<16, id: \.self) { index in
+                        RayShape(tapering: 0.75)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 0.80, green: 0.88, blue: 1.0).opacity(0.22),
+                                        Color(red: 0.70, green: 0.80, blue: 0.98).opacity(0.14),
+                                        Color.clear
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: 650, height: 8)
+                            .blur(radius: 18)
+                            .rotationEffect(.degrees(Double(index) * 22.5))
+                    }
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .position(x: geometry.size.width / 2 + 140, y: -260 + geometry.size.height / 2)
+                .rotationEffect(.degrees(secondaryRotation))
+                .mask(
+                    RadialGradient(
+                        colors: [
+                            Color.clear,
+                            Color.white.opacity(0.75),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: (geometry.size.width / 2 + 140) / geometry.size.width,
+                                        y: (-260 + geometry.size.height / 2) / geometry.size.height),
+                        startRadius: 160,
                         endRadius: 520
                     )
                 )
@@ -1230,93 +1852,212 @@ struct SunRaysEffect: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
 
-            // Tiny sunlit motes (very subtle — keeps it elegant)
+            // Moonbeams - mystical light beams
+            GeometryReader { geometry in
+                ZStack {
+                    ForEach(0..<8, id: \.self) { index in
+                        Rectangle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 0.88, green: 0.92, blue: 1.0).opacity(0.18),
+                                        Color(red: 0.78, green: 0.85, blue: 0.98).opacity(0.12),
+                                        Color(red: 0.68, green: 0.78, blue: 0.95).opacity(0.06),
+                                        Color.clear
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: 800, height: 24)
+                            .blur(radius: 28)
+                            .rotationEffect(.degrees(Double(index) * 45))
+                    }
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .position(x: geometry.size.width / 2 + 140, y: -260 + geometry.size.height / 2)
+                .rotationEffect(.degrees(rotation * 0.3))
+                .mask(
+                    RadialGradient(
+                        colors: [
+                            Color.clear,
+                            Color.white.opacity(0.6),
+                            Color.white.opacity(0.35),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: (geometry.size.width / 2 + 140) / geometry.size.width,
+                                        y: (-260 + geometry.size.height / 2) / geometry.size.height),
+                        startRadius: 180,
+                        endRadius: 600
+                    )
+                )
+                .opacity(0.4)
+                .blendMode(.screen)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+
+            // Enhanced moonlight motes with depth
             if !reduceMotion {
-                SunnyMotesEffect()
-                    .opacity(0.22)
+                MoonlightMotesEffect()
+                    .opacity(0.65)
                     .blendMode(.screen)
             }
 
-            // Gentle warm shimmer layer
+            // Cool moonlight shimmer
+            Rectangle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.clear,
+                            Color(red: 0.85, green: 0.90, blue: 1.0).opacity(0.12),
+                            Color(red: 0.75, green: 0.85, blue: 0.98).opacity(0.08),
+                            Color(red: 0.65, green: 0.80, blue: 0.95).opacity(0.04),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: 0.75, y: 0.15),
+                        startRadius: 50,
+                        endRadius: 550
+                    )
+                )
+                .opacity(0.25 + shimmer * 0.15)
+                .blendMode(.overlay)
+
+            // Atmospheric moonlight scattering effect
             Rectangle()
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color.yellow.opacity(0.0),
-                            Color.yellow.opacity(0.10),
-                            Color.orange.opacity(0.06),
-                            Color.yellow.opacity(0.0)
+                            Color(red: 0.90, green: 0.95, blue: 1.0).opacity(0.0),
+                            Color(red: 0.80, green: 0.88, blue: 0.98).opacity(0.06),
+                            Color(red: 0.70, green: 0.82, blue: 0.95).opacity(0.04),
+                            Color.clear
                         ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
+                        startPoint: .top,
+                        endPoint: .bottom
                     )
                 )
-                .opacity(0.18 + shimmer * 0.10)
-                .blendMode(.overlay)
+                .opacity(0.35)
+                .blendMode(.screen)
         }
         .allowsHitTesting(false)
         .onAppear {
             guard !reduceMotion else { return }
-            withAnimation(.linear(duration: 160).repeatForever(autoreverses: false)) {
+            
+            // Slower rotation for mysterious moon effect
+            withAnimation(.linear(duration: 280).repeatForever(autoreverses: false)) {
                 rotation = 360
             }
-            withAnimation(.easeInOut(duration: 4.8).repeatForever(autoreverses: true)) {
+            
+            // Counter-rotation for depth effect
+            withAnimation(.linear(duration: 380).repeatForever(autoreverses: false)) {
+                secondaryRotation = -360
+            }
+            
+            // Gentle pulsing shimmer
+            withAnimation(.easeInOut(duration: 7.0).repeatForever(autoreverses: true)) {
                 shimmer = 1
+            }
+            
+            // Subtle pulse for moon core
+            withAnimation(.easeInOut(duration: 5.2).repeatForever(autoreverses: true)) {
+                pulsePhase = 1
             }
         }
     }
 }
 
-struct SunnyMotesEffect: View {
-    @State private var motes: [(id: Int, x: CGFloat, y: CGFloat, size: CGFloat, speed: Double, delay: Double)] = []
+struct MoonlightMotesEffect: View {
+    @State private var motes: [(id: Int, x: CGFloat, y: CGFloat, size: CGFloat, speed: Double, delay: Double, horizontalDrift: CGFloat)] = []
 
     var body: some View {
         ZStack {
             ForEach(motes, id: \.id) { mote in
                 Circle()
-                    .fill(Color.white.opacity(0.85))
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                Color(red: 0.90, green: 0.95, blue: 1.0).opacity(0.90),
+                                Color(red: 0.80, green: 0.88, blue: 0.98).opacity(0.60),
+                                Color.clear
+                            ],
+                            center: .center,
+                            startRadius: 0,
+                            endRadius: mote.size / 2
+                        )
+                    )
                     .frame(width: mote.size, height: mote.size)
-                    .blur(radius: 0.6)
+                    .blur(radius: 1.0)
                     .offset(x: mote.x, y: mote.y)
-                    .modifier(DriftUpModifier(speed: mote.speed, delay: mote.delay))
+                    .modifier(MoonlightDriftModifier(
+                        speed: mote.speed,
+                        delay: mote.delay,
+                        horizontalDrift: mote.horizontalDrift
+                    ))
             }
         }
         .allowsHitTesting(false)
         .onAppear {
-            motes = (0..<28).map { i in
+            motes = (0..<60).map { i in
                 (
                     id: i,
-                    x: CGFloat.random(in: -260...260),
-                    y: CGFloat.random(in: -120...320),
-                    size: CGFloat.random(in: 1.2...2.6),
-                    speed: Double.random(in: 7.5...12.5),
-                    delay: Double.random(in: 0...2.5)
+                    x: CGFloat.random(in: -280...280),
+                    y: CGFloat.random(in: -140...340),
+                    size: CGFloat.random(in: 1.2...2.8),
+                    speed: Double.random(in: 10.0...18.0),
+                    delay: Double.random(in: 0...4.0),
+                    horizontalDrift: CGFloat.random(in: -30...30)
                 )
             }
         }
     }
 }
 
-private struct DriftUpModifier: ViewModifier {
+private struct MoonlightDriftModifier: ViewModifier {
     let speed: Double
     let delay: Double
-    @State private var offset: CGFloat = 0
+    let horizontalDrift: CGFloat
+    @State private var verticalOffset: CGFloat = 0
+    @State private var horizontalOffset: CGFloat = 0
     @State private var opacity: Double = 0.0
+    @State private var scale: CGFloat = 0.5
 
     func body(content: Content) -> some View {
         content
             .opacity(opacity)
-            .offset(y: offset)
+            .scaleEffect(scale)
+            .offset(x: horizontalOffset, y: verticalOffset)
             .onAppear {
-                withAnimation(.easeInOut(duration: 1.2).delay(delay)) {
+                // Fade in and scale up
+                withAnimation(.easeOut(duration: 2.0).delay(delay)) {
                     opacity = 1.0
+                    scale = 1.0
                 }
-                withAnimation(.linear(duration: speed).delay(delay).repeatForever(autoreverses: false)) {
-                    offset = -220
+                
+                // Vertical drift upward with fade out near the end
+                withAnimation(.linear(duration: speed).delay(delay)) {
+                    verticalOffset = -280
+                }
+                
+                // Horizontal gentle sway - more pronounced for moon
+                withAnimation(
+                    .easeInOut(duration: speed * 0.7)
+                    .repeatForever(autoreverses: true)
+                    .delay(delay)
+                ) {
+                    horizontalOffset = horizontalDrift
+                }
+                
+                // Fade out as it reaches the top
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay + speed * 0.75) {
+                    withAnimation(.easeIn(duration: speed * 0.25)) {
+                        opacity = 0.0
+                    }
                 }
             }
     }
 }
+
 struct RainEffect: View {
     @State private var drops: [(id: Int, x: CGFloat, delay: Double, speed: Double)] = []
     
@@ -1397,6 +2138,122 @@ struct WaterRippleEffect: View {
                     rippleOpacity = 0
                 }
             }
+    }
+}
+
+struct DrizzleEffect: View {
+    @State private var drops: [(id: Int, x: CGFloat, delay: Double, speed: Double)] = []
+    
+    var body: some View {
+        ZStack {
+            // Drizzle drops with individual animations - fewer and lighter than rain
+            ForEach(drops, id: \.id) { drop in
+                DrizzleDrop(delay: drop.delay, speed: drop.speed)
+                    .offset(x: drop.x)
+            }
+            
+            // Very subtle mist effect at bottom
+            DrizzleMistEffect()
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            // Fewer drops than rain (30 vs 50) for lighter effect
+            drops = (0..<30).map { i in
+                (
+                    id: i,
+                    x: CGFloat.random(in: -300...300),
+                    delay: Double(i) * 0.08, // Slightly more spaced out
+                    speed: Double.random(in: 0.8...1.4) // Slower than rain
+                )
+            }
+        }
+    }
+}
+
+struct DrizzleDrop: View {
+    let delay: Double
+    let speed: Double
+    @State private var yOffset: CGFloat = -400
+    @State private var opacity: Double = 0.3
+    
+    var body: some View {
+        Rectangle()
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.4),
+                        Color.white.opacity(0.2)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .frame(width: 1.5, height: CGFloat.random(in: 15...30)) // Smaller than rain
+            .offset(y: yOffset)
+            .blur(radius: 0.8) // More blur for softer appearance
+            .opacity(opacity)
+            .onAppear {
+                withAnimation(
+                    .linear(duration: speed)
+                    .repeatForever(autoreverses: false)
+                    .delay(delay)
+                ) {
+                    yOffset = 700
+                }
+                
+                // Subtle opacity variation to simulate lighter rain
+                withAnimation(
+                    .easeInOut(duration: speed * 0.6)
+                    .repeatForever(autoreverses: true)
+                    .delay(delay)
+                ) {
+                    opacity = Double.random(in: 0.2...0.5)
+                }
+            }
+    }
+}
+
+struct DrizzleMistEffect: View {
+    @State private var mistOpacity: Double = 0.0
+    @State private var mistOffset: CGFloat = 0
+    
+    var body: some View {
+        VStack {
+            Spacer()
+            
+            // Subtle mist effect at the bottom
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.0),
+                            Color.white.opacity(mistOpacity * 0.08),
+                            Color.white.opacity(mistOpacity * 0.12),
+                            Color.white.opacity(0.0)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(height: 150)
+                .blur(radius: 20)
+                .offset(y: mistOffset)
+        }
+        .onAppear {
+            withAnimation(
+                .easeInOut(duration: 4)
+                .repeatForever(autoreverses: true)
+            ) {
+                mistOpacity = 1.0
+            }
+            
+            withAnimation(
+                .easeInOut(duration: 6)
+                .repeatForever(autoreverses: true)
+            ) {
+                mistOffset = -20
+            }
+        }
     }
 }
 
