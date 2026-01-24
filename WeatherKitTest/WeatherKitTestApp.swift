@@ -7,15 +7,6 @@ import AppKit
 import WebKit
 import Charts
 
-
-// MARK: - Scroll offset tracking (for collapsing the search bar like an app)
-private struct ScrollOffsetPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
 @main
 struct WeatherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -222,9 +213,6 @@ struct ContentView: View {
     @FocusState private var searchFocused: Bool
     @State private var hoveredSuggestionIndex: Int? = nil
     @State private var selectedSuggestionIndex: Int? = nil
-    @State private var isSearchBarVisible: Bool = true
-    @State private var lastReportedScrollY: CGFloat = 0
-
     
     // Convenience initializer for previews/testing
     init(viewModel: WeatherViewModel? = nil) {
@@ -340,7 +328,7 @@ struct ContentView: View {
     }
     
     var mainContentView: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 20) {
             settingsButtonRow
             
             // Saved locations carousel
@@ -348,18 +336,14 @@ struct ContentView: View {
                 savedLocationsCarousel
             }
             
-            if isSearchBarVisible {
-                searchBarSection
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
+            searchBarSection
             currentLocationButton
             tabPickerView
             scrollArea
+                .frame(maxHeight: .infinity)
             lastUpdatedFooter
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 14)
-        .padding(.bottom, 12)
+        .padding(25)
         .background(Color.clear)
     }
     
@@ -368,41 +352,23 @@ struct ContentView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 10) {
                 ForEach(Array(viewModel.savedLocations.enumerated()), id: \.element.id) { index, location in
-                    Button(action: {
-                        viewModel.selectLocation(at: index)
-                    }) {
-                        HStack {
-                            Image(systemName: location.isCurrentLocation ? "location.fill" : "mappin.circle.fill")
-                                .font(.caption)
-                            Text(location.name)
-                                .font(.subheadline)
-                                .lineLimit(1)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(viewModel.currentLocationIndex == index ? Color.white.opacity(0.3) : Color.white.opacity(0.15))
-                        .foregroundColor(.white)
-                        .cornerRadius(20)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20)
-                                .stroke(Color.white.opacity(0.3), lineWidth: 1)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button(role: .destructive) {
+                    SavedLocationCard(
+                        location: location,
+                        isSelected: viewModel.currentLocationIndex == index,
+                        onSelect: {
+                            viewModel.selectLocation(at: index)
+                        },
+                        onRemove: {
                             if let idx = viewModel.savedLocations.firstIndex(where: { $0.id == location.id }) {
                                 viewModel.removeSavedLocation(at: IndexSet(integer: idx))
                             }
-                        } label: {
-                            Label("Remove", systemImage: "trash")
                         }
-                    }
+                    )
                 }
             }
             .padding(.horizontal, 5)
         }
-        .frame(height: 40)
+        .frame(height: 62)
     }
     
     @ViewBuilder
@@ -481,7 +447,7 @@ struct ContentView: View {
 
                     if index < suggestionsToShow.count - 1 {
                         Divider()
-                            .background(Color.white.opacity(0.14))
+                            .background(Color.white.opacity(0.12))
                             .padding(.leading, 44)
                     }
                 }
@@ -535,13 +501,6 @@ struct ContentView: View {
     @ViewBuilder
     private var scrollArea: some View {
         ScrollView {
-            // Track scroll offset so we can collapse/expand the search bar.
-            GeometryReader { proxy in
-                Color.clear
-                    .preference(key: ScrollOffsetPreferenceKey.self, value: proxy.frame(in: .named("mainScroll")).minY)
-            }
-            .frame(height: 0)
-
             if let weather = viewModel.currentWeather {
                 if selectedTab == 0 {
                     CurrentWeatherView(
@@ -586,30 +545,7 @@ struct ContentView: View {
                 .padding(.vertical, 40)
             }
         }
-        .coordinateSpace(name: "mainScroll")
-        .onPreferenceChange(ScrollOffsetPreferenceKey.self) { minY in
-            // minY starts at 0 and becomes negative as you scroll down.
-            lastReportedScrollY = minY
-            let hideThreshold: CGFloat = -60
-            let showThreshold: CGFloat = -20  // hysteresis to prevent flicker
-            if isSearchBarVisible {
-                if minY < hideThreshold {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                        isSearchBarVisible = false
-                    }
-                }
-            } else {
-                if minY > showThreshold {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                        isSearchBarVisible = true
-                    }
-                }
-            }
-        }
         .scrollDisabledWhenChartsVisible(selectedTab == 1)
-        .frame(maxHeight: .infinity)
-        .layoutPriority(1)
-        .padding(.bottom, 6)
     }
     
     @ViewBuilder
@@ -639,7 +575,6 @@ struct ContentView: View {
                 }
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.7))
-                .padding(.top, 4)
             }
         }
     }
@@ -847,63 +782,337 @@ struct WeatherBackdropView: View {
     }
 }
 
-struct SunRaysEffect: View {
-    @State private var rotation: Double = 0
-    @State private var pulseOpacity: Double = 0.5
-    
+
+struct StarsEffect: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private struct Star: Identifiable {
+        let id: Int
+        let x: CGFloat
+        let y: CGFloat
+        let size: CGFloat
+        let baseOpacity: Double
+        let twinkleSpeed: Double
+        let delay: Double
+    }
+
+    @State private var stars: [Star] = []
+    @State private var twinklePhase: Double = 0
+
     var body: some View {
         ZStack {
-            // Main sun glow
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color.yellow.opacity(0.4),
-                            Color.orange.opacity(0.2),
-                            Color.clear
-                        ],
-                        center: .center,
-                        startRadius: 0,
-                        endRadius: 200
-                    )
-                )
-                .frame(width: 400, height: 400)
-                .offset(y: -250)
-                .opacity(pulseOpacity)
-                .blur(radius: 40)
-            
-            // Rotating rays
-            ForEach(0..<12) { i in
-                Rectangle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.yellow.opacity(0.35),
-                                Color.orange.opacity(0.15),
-                                Color.clear
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(width: 80, height: 700)
-                    .offset(y: -200)
-                    .rotationEffect(.degrees(Double(i) * 30 + rotation))
+            ForEach(stars) { star in
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: star.size, height: star.size)
+                    .opacity(star.baseOpacity + (reduceMotion ? 0 : 0.25 * (0.5 + 0.5 * sin(twinklePhase / star.twinkleSpeed + star.delay))))
+                    .blur(radius: star.size > 2.2 ? 0.2 : 0)
+                    .offset(x: star.x, y: star.y)
             }
         }
-        .blur(radius: 25)
+        .blendMode(.screen)
         .allowsHitTesting(false)
         .onAppear {
-            withAnimation(.linear(duration: 180).repeatForever(autoreverses: false)) {
-                rotation = 360
+            if stars.isEmpty {
+                // Concentrate stars toward the upper half like the system Weather backgrounds.
+                stars = (0..<80).map { i in
+                    Star(
+                        id: i,
+                        x: CGFloat.random(in: -260...260),
+                        y: CGFloat.random(in: -420...50),
+                        size: CGFloat.random(in: 1.0...2.8),
+                        baseOpacity: Double.random(in: 0.15...0.45),
+                        twinkleSpeed: Double.random(in: 0.8...1.8),
+                        delay: Double.random(in: 0...6)
+                    )
+                }
             }
-            withAnimation(.easeInOut(duration: 4).repeatForever(autoreverses: true)) {
-                pulseOpacity = 0.7
+
+            guard !reduceMotion else { return }
+            withAnimation(.linear(duration: 10).repeatForever(autoreverses: false)) {
+                twinklePhase = 100
             }
         }
     }
 }
 
+struct NightGlowEffect: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulse: CGFloat = 0.35
+
+    var body: some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [
+                        Color.white.opacity(0.22),
+                        Color.blue.opacity(0.12),
+                        Color.clear
+                    ],
+                    center: .center,
+                    startRadius: 0,
+                    endRadius: 220
+                )
+            )
+            .frame(width: 420, height: 420)
+            .offset(x: 180, y: -260)
+            .opacity(pulse)
+            .blur(radius: 40)
+            .allowsHitTesting(false)
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 6).repeatForever(autoreverses: true)) {
+                    pulse = 0.55
+                }
+            }
+    }
+}
+
+struct LightningEffect: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let intensity: Double
+
+    @State private var flashOpacity: Double = 0
+    @State private var timer: Timer?
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.white)
+            .opacity(flashOpacity)
+            .blendMode(.screen)
+            .allowsHitTesting(false)
+            .onAppear {
+                guard !reduceMotion else { return }
+                scheduleNextFlash()
+            }
+            .onDisappear {
+                timer?.invalidate()
+                timer = nil
+            }
+    }
+
+    private func scheduleNextFlash() {
+        let next = Double.random(in: 3.5...10.0)
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: next, repeats: false) { _ in
+            flash()
+            scheduleNextFlash()
+        }
+    }
+
+    private func flash() {
+        // A quick double-flash feels most natural.
+        withAnimation(.easeOut(duration: 0.08)) { flashOpacity = 0.18 * intensity }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
+            withAnimation(.easeIn(duration: 0.20)) { flashOpacity = 0 }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.40) {
+            withAnimation(.easeOut(duration: 0.06)) { flashOpacity = 0.12 * intensity }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                withAnimation(.easeIn(duration: 0.20)) { flashOpacity = 0 }
+            }
+        }
+    }
+}
+
+struct FogEffect: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var drift: CGFloat = -0.15
+
+    var body: some View {
+        ZStack {
+            fogLayer(opacity: 0.22, blur: 40, y: -120, scale: 1.2, speed: 26, delay: 0)
+            fogLayer(opacity: 0.18, blur: 55, y: -20,  scale: 1.45, speed: 32, delay: 3)
+            fogLayer(opacity: 0.14, blur: 70, y: 120,  scale: 1.65, speed: 38, delay: 6)
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 20).repeatForever(autoreverses: true)) {
+                drift = 0.15
+            }
+        }
+    }
+
+    private func fogLayer(opacity: Double, blur: CGFloat, y: CGFloat, scale: CGFloat, speed: Double, delay: Double) -> some View {
+        RoundedRectangle(cornerRadius: 300)
+            .fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(opacity),
+                        Color.white.opacity(opacity * 0.55),
+                        Color.clear
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(width: 900, height: 420)
+            .scaleEffect(scale)
+            .offset(x: drift * 220, y: y)
+            .blur(radius: blur)
+            .opacity(0.9)
+            .animation(reduceMotion ? nil : .linear(duration: speed).repeatForever(autoreverses: true).delay(delay), value: drift)
+    }
+}
+
+
+struct SunRaysEffect: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var rotation: Double = 0
+    @State private var shimmer: Double = 0
+
+    var body: some View {
+        ZStack {
+            // Sun core + warm halo
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.white.opacity(0.55),
+                            Color.yellow.opacity(0.35),
+                            Color.orange.opacity(0.22),
+                            Color.clear
+                        ],
+                        center: .center,
+                        startRadius: 0,
+                        endRadius: 220
+                    )
+                )
+                .frame(width: 420, height: 420)
+                .offset(x: 140, y: -260)
+                .blur(radius: 18)
+                .opacity(0.95)
+
+            // Soft ray disc (masked so it fades naturally)
+            GeometryReader { geometry in
+                ZStack {
+                    ForEach(0..<24, id: \.self) { index in
+                        Rectangle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.yellow.opacity(0.25),
+                                        Color.orange.opacity(0.12),
+                                        Color.clear
+                                    ],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .frame(width: 600, height: 8)
+                            .blur(radius: 18)
+                            .rotationEffect(.degrees(Double(index) * 15))
+                    }
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .position(x: geometry.size.width / 2 + 140, y: -260 + geometry.size.height / 2)
+                .rotationEffect(.degrees(rotation))
+                .mask(
+                    RadialGradient(
+                        colors: [
+                            Color.clear,
+                            Color.white.opacity(0.9),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: (geometry.size.width / 2 + 140) / geometry.size.width,
+                                        y: (-260 + geometry.size.height / 2) / geometry.size.height),
+                        startRadius: 120,
+                        endRadius: 520
+                    )
+                )
+                .opacity(0.45)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+
+            // Tiny sunlit motes (very subtle — keeps it elegant)
+            if !reduceMotion {
+                SunnyMotesEffect()
+                    .opacity(0.22)
+                    .blendMode(.screen)
+            }
+
+            // Gentle warm shimmer layer
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.yellow.opacity(0.0),
+                            Color.yellow.opacity(0.10),
+                            Color.orange.opacity(0.06),
+                            Color.yellow.opacity(0.0)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .opacity(0.18 + shimmer * 0.10)
+                .blendMode(.overlay)
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.linear(duration: 160).repeatForever(autoreverses: false)) {
+                rotation = 360
+            }
+            withAnimation(.easeInOut(duration: 4.8).repeatForever(autoreverses: true)) {
+                shimmer = 1
+            }
+        }
+    }
+}
+
+struct SunnyMotesEffect: View {
+    @State private var motes: [(id: Int, x: CGFloat, y: CGFloat, size: CGFloat, speed: Double, delay: Double)] = []
+
+    var body: some View {
+        ZStack {
+            ForEach(motes, id: \.id) { mote in
+                Circle()
+                    .fill(Color.white.opacity(0.85))
+                    .frame(width: mote.size, height: mote.size)
+                    .blur(radius: 0.6)
+                    .offset(x: mote.x, y: mote.y)
+                    .modifier(DriftUpModifier(speed: mote.speed, delay: mote.delay))
+            }
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            motes = (0..<28).map { i in
+                (
+                    id: i,
+                    x: CGFloat.random(in: -260...260),
+                    y: CGFloat.random(in: -120...320),
+                    size: CGFloat.random(in: 1.2...2.6),
+                    speed: Double.random(in: 7.5...12.5),
+                    delay: Double.random(in: 0...2.5)
+                )
+            }
+        }
+    }
+}
+
+private struct DriftUpModifier: ViewModifier {
+    let speed: Double
+    let delay: Double
+    @State private var offset: CGFloat = 0
+    @State private var opacity: Double = 0.0
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(opacity)
+            .offset(y: offset)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 1.2).delay(delay)) {
+                    opacity = 1.0
+                }
+                withAnimation(.linear(duration: speed).delay(delay).repeatForever(autoreverses: false)) {
+                    offset = -220
+                }
+            }
+    }
+}
 struct RainEffect: View {
     @State private var drops: [(id: Int, x: CGFloat, delay: Double, speed: Double)] = []
     
@@ -1153,221 +1362,45 @@ struct AnimatedCloud: View {
 }
 
 
-struct NightGlowEffect: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pulse: CGFloat = 0.35
-
-    var body: some View {
-        Circle()
-            .fill(
-                RadialGradient(
-                    colors: [
-                        Color.white.opacity(0.22),
-                        Color.blue.opacity(0.12),
-                        Color.clear
-                    ],
-                    center: .center,
-                    startRadius: 0,
-                    endRadius: 220
-                )
-            )
-            .frame(width: 420, height: 420)
-            .offset(x: 180, y: -260)
-            .opacity(pulse)
-            .blur(radius: 40)
-            .allowsHitTesting(false)
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.easeInOut(duration: 6).repeatForever(autoreverses: true)) {
-                    pulse = 0.55
-                }
-            }
-    }
-}
-
-struct StarsEffect: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private struct Star: Identifiable {
-        let id: Int
-        let x: CGFloat
-        let y: CGFloat
-        let size: CGFloat
-        let baseOpacity: Double
-        let twinkleSpeed: Double
-        let delay: Double
-    }
-
-    @State private var stars: [Star] = []
-    @State private var twinklePhase: Double = 0
-
-    var body: some View {
-        ZStack {
-            ForEach(stars) { star in
-                Circle()
-                    .fill(Color.white)
-                    .frame(width: star.size, height: star.size)
-                    .opacity(star.baseOpacity + (reduceMotion ? 0 : 0.25 * (0.5 + 0.5 * sin(twinklePhase / star.twinkleSpeed + star.delay))))
-                    .blur(radius: star.size > 2.2 ? 0.2 : 0)
-                    .offset(x: star.x, y: star.y)
-            }
-        }
-        .blendMode(.screen)
-        .allowsHitTesting(false)
-        .onAppear {
-            if stars.isEmpty {
-                // Concentrate stars toward the upper half like the system Weather backgrounds.
-                stars = (0..<80).map { i in
-                    Star(
-                        id: i,
-                        x: CGFloat.random(in: -260...260),
-                        y: CGFloat.random(in: -420...50),
-                        size: CGFloat.random(in: 1.0...2.8),
-                        baseOpacity: Double.random(in: 0.15...0.45),
-                        twinkleSpeed: Double.random(in: 0.8...1.8),
-                        delay: Double.random(in: 0...6)
-                    )
-                }
-            }
-
-            guard !reduceMotion else { return }
-            withAnimation(.linear(duration: 10).repeatForever(autoreverses: false)) {
-                twinklePhase = 100
-            }
-        }
-    }
-}
-
-struct LightningEffect: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let intensity: Double
-
-    @State private var flashOpacity: Double = 0
-    @State private var timer: Timer?
-
-    var body: some View {
-        Rectangle()
-            .fill(Color.white)
-            .opacity(flashOpacity)
-            .blendMode(.screen)
-            .allowsHitTesting(false)
-            .onAppear {
-                guard !reduceMotion else { return }
-                scheduleNextFlash()
-            }
-            .onDisappear {
-                timer?.invalidate()
-                timer = nil
-            }
-    }
-
-    private func scheduleNextFlash() {
-        let next = Double.random(in: 3.5...10.0)
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: next, repeats: false) { _ in
-            flash()
-            scheduleNextFlash()
-        }
-    }
-
-    private func flash() {
-        // A quick double-flash feels most natural.
-        withAnimation(.easeOut(duration: 0.08)) { flashOpacity = 0.18 * intensity }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
-            withAnimation(.easeIn(duration: 0.20)) { flashOpacity = 0 }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.40) {
-            withAnimation(.easeOut(duration: 0.06)) { flashOpacity = 0.12 * intensity }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                withAnimation(.easeIn(duration: 0.20)) { flashOpacity = 0 }
-            }
-        }
-    }
-}
-
-struct FogEffect: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var drift: CGFloat = -0.15
-
-    var body: some View {
-        ZStack {
-            fogLayer(opacity: 0.22, blur: 40, y: -120, scale: 1.2, speed: 26, delay: 0)
-            fogLayer(opacity: 0.18, blur: 55, y: -20,  scale: 1.45, speed: 32, delay: 3)
-            fogLayer(opacity: 0.14, blur: 70, y: 120,  scale: 1.65, speed: 38, delay: 6)
-        }
-        .allowsHitTesting(false)
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 20).repeatForever(autoreverses: true)) {
-                drift = 0.15
-            }
-        }
-    }
-
-    private func fogLayer(opacity: Double, blur: CGFloat, y: CGFloat, scale: CGFloat, speed: Double, delay: Double) -> some View {
-        RoundedRectangle(cornerRadius: 300)
-            .fill(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(opacity),
-                        Color.white.opacity(opacity * 0.55),
-                        Color.clear
-                    ],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-            .frame(width: 900, height: 420)
-            .scaleEffect(scale)
-            .offset(x: drift * 220, y: y)
-            .blur(radius: blur)
-            .opacity(0.9)
-            .animation(reduceMotion ? nil : .linear(duration: speed).repeatForever(autoreverses: true).delay(delay), value: drift)
-    }
-}
-
 struct CurrentWeatherView: View {
     let weather: CurrentWeather
     let locationName: String?
     let dailyForecast: DayWeather?
     let alerts: [WeatherAlert]
     @AppStorage("useCelsius") private var useCelsius: Bool = false
-    
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                // Weather Alerts
-                if !alerts.isEmpty {
-                    ForEach(Array(alerts.enumerated()), id: \.offset) { index, alert in
-                        WeatherAlertBanner(alert: alert)
-                    }
-                }
-                
-                // Main Temperature Card
-                mainTemperatureCard
-                
-                // Weather Metrics Grid
-                weatherMetricsGrid
-                
-                // Sun & Moon Info
-                if dailyForecast != nil {
-                    sunMoonCard
+        VStack(spacing: 12) {
+            // Weather Alerts
+            if !alerts.isEmpty {
+                ForEach(Array(alerts.enumerated()), id: \.offset) { _, alert in
+                    WeatherAlertBanner(alert: alert)
                 }
             }
-            .padding(.horizontal)
+
+            mainTemperatureCard
+
+            // Weather Metrics
+            compactMetricsStack
+
+            // Sun & Moon Info
+            if dailyForecast != nil {
+                sunMoonCard
+            }
         }
+        .padding(.horizontal)
+        .padding(.top, 4)
     }
     
     // MARK: - Main Temperature Card
     private var mainTemperatureCard: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 4) {
             if let locationName = locationName {
                 HStack {
                     Image(systemName: "location.fill")
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundColor(.white.opacity(0.7))
                     Text(locationName)
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.callout)
                         .fontWeight(.medium)
                         .foregroundColor(.white)
                 }
@@ -1375,46 +1408,46 @@ struct CurrentWeatherView: View {
             
             // Large weather icon
             Image(systemName: weather.symbolName)
-                .font(.system(size: 80))
+                .font(.system(size: 60))
                 .foregroundColor(.white)
                 .symbolRenderingMode(.hierarchical)
-                .padding(.vertical, 8)
+                .padding(.vertical, 4)
             
             // Temperature
             Text("\(formattedTemperature(weather.temperature))°")
-                .font(.system(size: 72, weight: .thin))
+                .font(.system(size: 56, weight: .thin))
                 .foregroundColor(.white)
             
             // Condition description
             Text(weather.condition.description)
-                .font(.title2)
+                .font(.headline)
                 .foregroundColor(.white.opacity(0.9))
             
             // High/Low if available
             if let high = dailyForecast?.highTemperature,
                let low = dailyForecast?.lowTemperature {
-                HStack(spacing: 12) {
-                    HStack(spacing: 4) {
+                HStack(spacing: 10) {
+                    HStack(spacing: 3) {
                         Image(systemName: "arrow.up")
-                            .font(.caption)
+                            .font(.caption2)
                         Text("\(formattedTemperature(high))°")
                     }
                     Text("•")
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         Image(systemName: "arrow.down")
-                            .font(.caption)
+                            .font(.caption2)
                         Text("\(formattedTemperature(low))°")
                     }
                 }
-                .font(.subheadline)
+                .font(.caption)
                 .foregroundColor(.white.opacity(0.8))
-                .padding(.top, 4)
+                .padding(.top, 2)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 24)
+        .padding(.vertical, 16)
         .background(GlassMorphicBackground())
-        .cornerRadius(20)
+        .cornerRadius(16)
     }
     
     // MARK: - Weather Metrics Grid
@@ -1482,26 +1515,44 @@ struct CurrentWeatherView: View {
             )
         }
     }
+
+// MARK: - Prototype Option 1: Compact Stack
+private var compactMetricsStack: some View {
+    VStack(spacing: 8) {
+        MetricRow(icon: "wind", label: "Wind", value: weather.wind.speed.formatted())
+        MetricRow(icon: "thermometer.medium", label: "Feels Like", value: "\(formattedTemperature(weather.apparentTemperature))°")
+        MetricRow(icon: "humidity.fill", label: "Humidity", value: "\(Int(weather.humidity * 100))%")
+        MetricRow(icon: "sun.max.fill", label: "UV Index", value: weather.uvIndex.category.description)
+        MetricRow(icon: "eye.fill", label: "Visibility", value: formatVisibility(weather.visibility))
+        MetricRow(icon: "gauge.with.dots.needle.33percent", label: "Pressure", value: formatPressure(weather.pressure))
+    }
+    .padding(12)
+    .background(GlassMorphicBackground())
+    .cornerRadius(16)
+}
+
+
     
     // MARK: - Sun & Moon Card
     private var sunMoonCard: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 12) {
             if let sun = dailyForecast?.sun {
-                HStack(spacing: 16) {
+                HStack(spacing: 12) {
                     // Sunrise
                     if let sunrise = sun.sunrise {
-                        VStack(spacing: 8) {
+                        VStack(spacing: 6) {
                             Image(systemName: "sunrise.fill")
-                                .font(.title)
+                                .font(.title3)
                                 .foregroundColor(.orange)
                                 .symbolRenderingMode(.hierarchical)
                             
                             Text("Sunrise")
-                                .font(.caption)
+                                .font(.caption2)
                                 .foregroundColor(.white.opacity(0.7))
                             
                             Text(sunrise.formatted(date: .omitted, time: .shortened))
-                                .font(.headline)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
                                 .foregroundColor(.white)
                         }
                         .frame(maxWidth: .infinity)
@@ -1509,22 +1560,23 @@ struct CurrentWeatherView: View {
                     
                     Divider()
                         .background(Color.white.opacity(0.2))
-                        .frame(height: 60)
+                        .frame(height: 50)
                     
                     // Sunset
                     if let sunset = sun.sunset {
-                        VStack(spacing: 8) {
+                        VStack(spacing: 6) {
                             Image(systemName: "sunset.fill")
-                                .font(.title)
+                                .font(.title3)
                                 .foregroundColor(.orange)
                                 .symbolRenderingMode(.hierarchical)
                             
                             Text("Sunset")
-                                .font(.caption)
+                                .font(.caption2)
                                 .foregroundColor(.white.opacity(0.7))
                             
                             Text(sunset.formatted(date: .omitted, time: .shortened))
-                                .font(.headline)
+                                .font(.subheadline)
+                                .fontWeight(.medium)
                                 .foregroundColor(.white)
                         }
                         .frame(maxWidth: .infinity)
@@ -1537,19 +1589,20 @@ struct CurrentWeatherView: View {
                 Divider()
                     .background(Color.white.opacity(0.2))
                 
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     Image(systemName: moonPhaseIcon(for: moonPhase))
-                        .font(.title)
+                        .font(.title3)
                         .foregroundColor(.yellow)
                         .symbolRenderingMode(.hierarchical)
                     
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 2) {
                         Text("Moon Phase")
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundColor(.white.opacity(0.7))
                         
                         Text(moonPhase.description)
-                            .font(.headline)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
                             .foregroundColor(.white)
                     }
                     
@@ -1557,9 +1610,10 @@ struct CurrentWeatherView: View {
                 }
             }
         }
-        .padding()
+        .padding(12)
         .background(GlassMorphicBackground())
-        .cornerRadius(20)
+        .cornerRadius(16)
+        
     }
     
     // MARK: - Helper Functions
@@ -1713,6 +1767,60 @@ struct WeatherMetricCard: View {
         .cornerRadius(16)
     }
 }
+
+
+// MARK: - Compact metric components (Current view prototypes)
+struct MetricRow: View {
+    let icon: String
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .frame(width: 20, alignment: .center)
+                .foregroundColor(.white.opacity(0.92))
+                .symbolRenderingMode(.hierarchical)
+                .font(.caption)
+
+            Text(label)
+                .foregroundColor(.white.opacity(0.75))
+
+            Spacer(minLength: 8)
+
+            Text(value)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+        }
+        .font(.subheadline)
+    }
+}
+
+struct CompactMetricTile: View {
+    let icon: String
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: icon)
+                .foregroundColor(.white.opacity(0.92))
+                .symbolRenderingMode(.hierarchical)
+
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.7))
+
+            Text(value)
+                .font(.headline)
+                .foregroundColor(.white)
+        }
+        .padding(12)
+        .background(GlassMorphicBackground())
+        .cornerRadius(14)
+    }
+}
+
 
 struct HourlyForecastView: View {
     let hourlyForecast: [HourWeather]
@@ -1963,9 +2071,8 @@ struct WeatherAlertBanner: View {
             
             if isExpanded {
                 VStack(spacing: 12) {
-                    AlertDetailView(url: alert.detailsURL)
-                        .frame(height: 420)
-                        .padding(.top, 2)
+                    AlertDetailView(title: alert.summary, url: alert.detailsURL)
+                        .frame(height: 320)
 
                     HStack(spacing: 12) {
                         Button {
@@ -2053,6 +2160,7 @@ struct WeatherAlertBanner: View {
 }
 
 struct AlertDetailView: View {
+    let title: String
     let url: URL
     @State private var isLoading = true
     @State private var parsedBlocks: [AlertBlock] = []
@@ -2061,7 +2169,7 @@ struct AlertDetailView: View {
         ZStack {
             if !parsedBlocks.isEmpty {
                 ParsedAlertView(blocks: parsedBlocks)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
                 // While loading or if parsing fails, show the WebView temporarily
                 AlertWebView(url: url, isLoading: $isLoading, onParsedBlocks: { blocks in
@@ -2071,7 +2179,7 @@ struct AlertDetailView: View {
                         self.isLoading = false
                     }
                 })
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
             }
 
             if isLoading && parsedBlocks.isEmpty {
@@ -2090,7 +2198,7 @@ struct AlertDetailView: View {
                 )
             }
         }
-        .frame(maxHeight: 460)
+        .frame(maxHeight: 340)
     }
 }
 
@@ -2118,8 +2226,664 @@ struct AlertBlock: Codable, Identifiable {
 
 // MARK: - Parsed Alert View
 
-
-
+//struct ParsedAlertView: View {
+//    let title: String
+//    let sourceURL: URL
+//    let blocks: [AlertBlock]
+//
+//    private struct AlertSection: Identifiable {
+//        let id = UUID()
+//        let header: String
+//        let primary: String
+//        let secondary: String?
+//        let bulletLines: [String]?
+//        let linkTitle: String?
+//        let linkURL: URL?
+//    }
+//
+//    private var labeledSectionsInOrder: [(String, String)] {
+//        blocks.compactMap { block in
+//            guard block.type == "labeledSection", let label = block.label, let value = block.value else { return nil }
+//            return (label.trimmingCharacters(in: .whitespacesAndNewlines), value.trimmingCharacters(in: .whitespacesAndNewlines))
+//        }
+//    }
+//
+//    private var fallbackParagraphs: [String] {
+//        blocks.compactMap { block in
+//            guard block.type == "paragraph", let text = block.text else { return nil }
+//            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+//            return trimmed.isEmpty ? nil : trimmed
+//        }
+//    }
+//
+//    private var sections: [AlertSection] {
+//        var result: [AlertSection] = []
+//
+//        for (label, rawValue) in labeledSectionsInOrder {
+//            let normalized = label.trimmingCharacters(in: CharacterSet(charactersIn: ":* "))
+//            let header = normalized
+//            let value = rawValue
+//
+//            if normalized.caseInsensitiveCompare("Severity") == .orderedSame {
+//                let (primary, secondary) = splitSeverity(value)
+//                result.append(
+//                    AlertSection(
+//                        header: header,
+//                        primary: primary,
+//                        secondary: secondary,
+//                        bulletLines: nil,
+//                        linkTitle: nil,
+//                        linkURL: nil
+//                    )
+//                )
+//                continue
+//            }
+//
+//            if normalized.caseInsensitiveCompare("Description") == .orderedSame {
+//                let bullets = splitBullets(value)
+//                result.append(
+//                    AlertSection(
+//                        header: header,
+//                        primary: "",
+//                        secondary: nil,
+//                        bulletLines: bullets.isEmpty ? nil : bullets,
+//                        linkTitle: nil,
+//                        linkURL: nil
+//                    )
+//                )
+//                continue
+//            }
+//
+//            if normalized.caseInsensitiveCompare("Issued By") == .orderedSame {
+//                result.append(
+//                    AlertSection(
+//                        header: header,
+//                        primary: value,
+//                        secondary: nil,
+//                        bulletLines: nil,
+//                        linkTitle: "View Alert Source",
+//                        linkURL: sourceURL
+//                    )
+//                )
+//                continue
+//            }
+//
+//            result.append(
+//                AlertSection(
+//                    header: header,
+//                    primary: value,
+//                    secondary: nil,
+//                    bulletLines: nil,
+//                    linkTitle: nil,
+//                    linkURL: nil
+//                )
+//            )
+//        }
+//
+//        // If we didn't get a Description section from labeled sections, fall back to any paragraph blocks.
+//        if !fallbackParagraphs.isEmpty, !result.contains(where: { $0.header.lowercased() == "description" }) {
+//            result.append(
+//                AlertSection(
+//                    header: "Description",
+//                    primary: "",
+//                    secondary: nil,
+//                    bulletLines: splitBullets(fallbackParagraphs.joined(separator: "\n")),
+//                    linkTitle: nil,
+//                    linkURL: nil
+//                )
+//            )
+//        }
+//
+//        return result
+//    }
+//
+//    var body: some View {
+//        VStack(spacing: 0) {
+//            HStack {
+//                Text(title)
+//                    .font(.headline)
+//                    .fontWeight(.semibold)
+//                Spacer()
+//            }
+//            .padding(16)
+//
+//            Divider()
+//
+//            ScrollView {
+//                VStack(alignment: .leading, spacing: 0) {
+//                    ForEach(sections.indices, id: \.self) { index in
+//                        let section = sections[index]
+//                        AlertSectionView(section: section)
+//
+//                        if index < sections.count - 1 {
+//                            Divider()
+//                        }
+//                    }
+//                }
+//            }
+//        }
+//        .background(
+//            RoundedRectangle(cornerRadius: 14)
+//                .fill(Color(NSColor.controlBackgroundColor))
+//        )
+//        .overlay(
+//            RoundedRectangle(cornerRadius: 14)
+//                .stroke(Color(NSColor.separatorColor).opacity(0.35), lineWidth: 1)
+//        )
+//        .clipShape(RoundedRectangle(cornerRadius: 14))
+//    }
+//
+//    private struct AlertSectionView: View {
+//        let section: AlertSection
+//
+//        var body: some View {
+//            VStack(alignment: .leading, spacing: 8) {
+//                Text(section.header)
+//                    .font(.headline)
+//
+//                if !section.primary.isEmpty {
+//                    Text(section.primary)
+//                        .font(.body)
+//                }
+//
+//                if let secondary = section.secondary, !secondary.isEmpty {
+//                    Text(secondary)
+//                        .font(.subheadline)
+//                        .foregroundColor(.secondary)
+//                }
+//
+//                if let bullets = section.bulletLines, !bullets.isEmpty {
+//                    VStack(alignment: .leading, spacing: 6) {
+//                        ForEach(bullets, id: \.self) { line in
+//                            Text(line)
+//                                .font(.subheadline)
+//                                .foregroundColor(.secondary)
+//                                .fixedSize(horizontal: false, vertical: true)
+//                        }
+//                    }
+//                    .padding(.top, 2)
+//                }
+//
+//                if let linkTitle = section.linkTitle, let linkURL = section.linkURL {
+//                    Link(linkTitle, destination: linkURL)
+//                        .font(.subheadline)
+//                }
+//            }
+//            .padding(16)
+//            .frame(maxWidth: .infinity, alignment: .leading)
+//        }
+//    }
+//
+//    private func splitSeverity(_ raw: String) -> (String, String?) {
+//        // NWS text tends to come through as: "Moderate Possible threat to life or property"
+//        // Keep the first token as the "rating" and the remainder as secondary context.
+//        let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+//        let parts = cleaned.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+//        if parts.count == 2 {
+//            return (String(parts[0]), String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines))
+//        }
+//        return (cleaned, nil)
+//    }
+//
+//    private func splitBullets(_ raw: String) -> [String] {
+//        let cleaned = raw.replacingOccurrences(of: "\r", with: "")
+//        // Prefer splitting on NWS-style "* " bullets.
+//        let parts = cleaned
+//            .components(separatedBy: "\n")
+//            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+//            .filter { !$0.isEmpty }
+//
+//        // If we already have lines that look like bullets, keep them as-is.
+//        if parts.contains(where: { $0.hasPrefix("*") }) {
+//            return parts
+//        }
+//
+//        // Otherwise, attempt to split inline "*" markers.
+//        let inlineParts = cleaned
+//            .components(separatedBy: "*")
+//            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+//            .filter { !$0.isEmpty }
+//
+//        if inlineParts.count > 1 {
+//            return inlineParts.map { "* " + $0 }
+//        }
+//
+//        return parts
+//    }
+//
+//    @ViewBuilder
+//    private func blockView(for block: AlertBlock) -> some View {
+//        switch block.type {
+//        case "labeledSection":
+//            labeledSectionView(block: block)
+//        case "heading":
+//            headingView(level: block.level ?? 1, text: block.text ?? "")
+//                .padding(.horizontal, 16)
+//                .padding(.top, block.level ?? 1 == 1 ? 12 : 6)
+//        case "paragraph":
+//            paragraphView(block: block)
+//        case "orderedList":
+//            orderedListView(items: block.items ?? [])
+//        case "unorderedList":
+//            unorderedListView(items: block.items ?? [])
+//        case "definitionList":
+//            definitionListView(items: block.items ?? [])
+//        default:
+//            EmptyView()
+//        }
+//    }
+//
+//    @ViewBuilder
+//    private func labeledSectionView(block: AlertBlock) -> some View {
+//        VStack(alignment: .leading, spacing: 6) {
+//            if let label = block.label {
+//                Text(label)
+//                    .font(.system(size: 13, weight: .semibold))
+//                    .foregroundColor(.white.opacity(0.95))
+//                    .textCase(.uppercase)
+//                    .kerning(0.3)
+//            }
+//
+//            if let value = block.value, !value.isEmpty {
+//                Text(formatValue(value))
+//                    .font(.system(size: 14, weight: .regular))
+//                    .foregroundColor(.white.opacity(0.75))
+//                    .lineSpacing(3)
+//                    .fixedSize(horizontal: false, vertical: true)
+//            }
+//        }
+//        .frame(maxWidth: .infinity, alignment: .leading)
+//        .padding(.vertical, 14)
+//        .padding(.horizontal, 20)
+//        .background(Color.clear)
+//        .overlay(
+//            Rectangle()
+//                .fill(Color.white.opacity(0.08))
+//                .frame(height: 0.5),
+//            alignment: .bottom
+//        )
+//    }
+//
+//    private func formatValue(_ value: String) -> String {
+//        var formatted = value.trimmingCharacters(in: .whitespacesAndNewlines)
+//
+//        // Remove trailing periods for cleaner look
+//        while formatted.hasSuffix(".") {
+//            formatted = String(formatted.dropLast())
+//        }
+//
+//        // Fix multiple spaces
+//        formatted = formatted.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+//
+//        return formatted
+//    }
+//
+//    @ViewBuilder
+//    private func paragraphView(block: AlertBlock) -> some View {
+//        VStack(alignment: .leading, spacing: 14) {
+//            if let text = block.text, !text.isEmpty {
+//                Text(formatParagraphText(text))
+//                    .foregroundColor(.white)
+//                    .font(.callout)
+//                    .lineSpacing(6)
+//                    .fixedSize(horizontal: false, vertical: true)
+//                    .frame(maxWidth: .infinity, alignment: .leading)
+//            }
+//            if let links = block.links {
+//                linksView(links: links)
+//            }
+//        }
+//        .padding(.horizontal, 22)
+//        .padding(.vertical, 18)
+//        .background(
+//            RoundedRectangle(cornerRadius: 14)
+//                .fill(Color.white.opacity(0.12))
+//                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+//        )
+//        .overlay(
+//            RoundedRectangle(cornerRadius: 14)
+//                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+//        )
+//        .padding(.horizontal, 12)
+//    }
+//
+//    private func formatParagraphText(_ text: String) -> String {
+//        var formatted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+//
+//        // Add period at end if missing
+//        if !formatted.isEmpty && ![".", "!", "?", ":", ";"].contains(where: { formatted.hasSuffix(String($0)) }) {
+//            formatted += "."
+//        }
+//
+//        // Fix multiple spaces
+//        formatted = formatted.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+//
+//        // Ensure proper spacing after punctuation
+//        formatted = formatted.replacingOccurrences(of: #"([.!?])([A-Z])"#, with: "$1 $2", options: .regularExpression)
+//
+//        return formatted
+//    }
+//
+//    @ViewBuilder
+//    private func linksView(links: [AlertLink]) -> some View {
+//        VStack(alignment: .leading, spacing: 12) {
+//            ForEach(links, id: \.href) { link in
+//                linkButton(link: link)
+//            }
+//        }
+//        .padding(.top, 6)
+//    }
+//
+//    @ViewBuilder
+//    private func linkButton(link: AlertLink) -> some View {
+//        Button(action: {
+//            if let url = URL(string: link.href) {
+//                NSWorkspace.shared.open(url)
+//            }
+//        }) {
+//            HStack(spacing: 10) {
+//                Image(systemName: "arrow.up.right.square.fill")
+//                    .font(.body)
+//                    .foregroundColor(.cyan)
+//                Text(link.text)
+//                    .font(.callout)
+//                    .fontWeight(.medium)
+//                    .underline()
+//                    .foregroundColor(.cyan)
+//                Spacer()
+//            }
+//            .padding(.horizontal, 16)
+//            .padding(.vertical, 12)
+//            .background(
+//                RoundedRectangle(cornerRadius: 10)
+//                    .fill(Color.cyan.opacity(0.18))
+//            )
+//            .overlay(
+//                RoundedRectangle(cornerRadius: 10)
+//                    .stroke(Color.cyan.opacity(0.5), lineWidth: 1.5)
+//            )
+//        }
+//        .buttonStyle(.plain)
+//    }
+//
+//    @ViewBuilder
+//    private func orderedListView(items: [String]) -> some View {
+//        if !items.isEmpty {
+//            VStack(alignment: .leading, spacing: 16) {
+//                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+//                    orderedListItem(index: index, item: item, isLast: index == items.count - 1)
+//                }
+//            }
+//            .padding(20)
+//            .background(
+//                RoundedRectangle(cornerRadius: 14)
+//                    .fill(Color.orange.opacity(0.12))
+//                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+//            )
+//            .overlay(
+//                RoundedRectangle(cornerRadius: 14)
+//                    .stroke(Color.orange.opacity(0.35), lineWidth: 1.5)
+//            )
+//            .padding(.horizontal, 12)
+//        }
+//    }
+//
+//    @ViewBuilder
+//    private func orderedListItem(index: Int, item: String, isLast: Bool) -> some View {
+//        VStack(spacing: 0) {
+//            HStack(alignment: .top, spacing: 16) {
+//                ZStack {
+//                    Circle()
+//                        .fill(Color.orange.opacity(0.3))
+//                        .frame(width: 36, height: 36)
+//                    Circle()
+//                        .stroke(Color.orange.opacity(0.5), lineWidth: 2)
+//                        .frame(width: 36, height: 36)
+//                    Text("\(index + 1)")
+//                        .foregroundColor(.orange)
+//                        .font(.callout)
+//                        .fontWeight(.bold)
+//                }
+//                .padding(.top, 1)
+//
+//                Text(formatListItemText(item))
+//                    .foregroundColor(.white)
+//                    .font(.callout)
+//                    .lineSpacing(5)
+//                    .fixedSize(horizontal: false, vertical: true)
+//                    .frame(maxWidth: .infinity, alignment: .leading)
+//            }
+//
+//            if !isLast {
+//                Divider()
+//                    .background(Color.orange.opacity(0.2))
+//                    .padding(.leading, 52)
+//                    .padding(.top, 18)
+//            }
+//        }
+//    }
+//
+//    private func formatListItemText(_ text: String) -> String {
+//        var formatted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+//
+//        // Add period at end if missing
+//        if !formatted.isEmpty && ![".", "!", "?", ":", ";"].contains(where: { formatted.hasSuffix(String($0)) }) {
+//            formatted += "."
+//        }
+//
+//        // Fix multiple spaces
+//        formatted = formatted.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+//
+//        return formatted
+//    }
+//
+//    @ViewBuilder
+//    private func unorderedListView(items: [String]) -> some View {
+//        if !items.isEmpty {
+//            VStack(alignment: .leading, spacing: 14) {
+//                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+//                    unorderedListItem(item: item, isLast: index == items.count - 1)
+//                }
+//            }
+//            .padding(20)
+//            .background(
+//                RoundedRectangle(cornerRadius: 14)
+//                    .fill(Color.blue.opacity(0.12))
+//                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+//            )
+//            .overlay(
+//                RoundedRectangle(cornerRadius: 14)
+//                    .stroke(Color.blue.opacity(0.35), lineWidth: 1.5)
+//            )
+//            .padding(.horizontal, 12)
+//        }
+//    }
+//
+//    @ViewBuilder
+//    private func unorderedListItem(item: String, isLast: Bool) -> some View {
+//        VStack(spacing: 0) {
+//            HStack(alignment: .top, spacing: 14) {
+//                Circle()
+//                    .fill(Color.blue)
+//                    .frame(width: 10, height: 10)
+//                    .padding(.top, 8)
+//
+//                Text(formatListItemText(item))
+//                    .foregroundColor(.white)
+//                    .font(.callout)
+//                    .lineSpacing(5)
+//                    .fixedSize(horizontal: false, vertical: true)
+//                    .frame(maxWidth: .infinity, alignment: .leading)
+//            }
+//
+//            if !isLast {
+//                Divider()
+//                    .background(Color.blue.opacity(0.2))
+//                    .padding(.leading, 24)
+//                    .padding(.top, 16)
+//            }
+//        }
+//    }
+//
+//    @ViewBuilder
+//    private func definitionListView(items: [String]) -> some View {
+//        if !items.isEmpty {
+//            VStack(alignment: .leading, spacing: 14) {
+//                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+//                    definitionListItem(item: item, isLast: index == items.count - 1)
+//                }
+//            }
+//            .padding(20)
+//            .background(
+//                RoundedRectangle(cornerRadius: 14)
+//                    .fill(Color.purple.opacity(0.12))
+//                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
+//            )
+//            .overlay(
+//                RoundedRectangle(cornerRadius: 14)
+//                    .stroke(Color.purple.opacity(0.35), lineWidth: 1.5)
+//            )
+//            .padding(.horizontal, 12)
+//        }
+//    }
+//
+//    @ViewBuilder
+//    private func definitionListItem(item: String, isLast: Bool) -> some View {
+//        VStack(spacing: 0) {
+//            HStack(alignment: .top, spacing: 12) {
+//                Image(systemName: "info.circle.fill")
+//                    .font(.title3)
+//                    .foregroundColor(.purple)
+//                    .padding(.top, 2)
+//
+//                Text(formatDefinitionText(item))
+//                    .foregroundColor(.white)
+//                    .font(.callout)
+//                    .lineSpacing(5)
+//                    .fixedSize(horizontal: false, vertical: true)
+//                    .frame(maxWidth: .infinity, alignment: .leading)
+//            }
+//
+//            if !isLast {
+//                Divider()
+//                    .background(Color.purple.opacity(0.2))
+//                    .padding(.leading, 38)
+//                    .padding(.top, 16)
+//            }
+//        }
+//    }
+//
+//    private func formatDefinitionText(_ text: String) -> String {
+//        var formatted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+//
+//        // If it contains a colon, format as "Term: Definition."
+//        if let colonRange = formatted.range(of: ":") {
+//            let term = formatted[..<colonRange.lowerBound].trimmingCharacters(in: .whitespaces)
+//            var definition = formatted[colonRange.upperBound...].trimmingCharacters(in: .whitespaces)
+//
+//            // Add period to definition if missing
+//            if !definition.isEmpty && ![".", "!", "?"].contains(where: { definition.hasSuffix(String($0)) }) {
+//                definition += "."
+//            }
+//
+//            formatted = "\(term): \(definition)"
+//        } else {
+//            // No colon, just add period if missing
+//            if !formatted.isEmpty && ![".", "!", "?", ":", ";"].contains(where: { formatted.hasSuffix(String($0)) }) {
+//                formatted += "."
+//            }
+//        }
+//
+//        // Fix multiple spaces
+//        formatted = formatted.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+//
+//        return formatted
+//    }
+//
+//    @ViewBuilder
+//    private func headingView(level: Int, text: String) -> some View {
+//        HStack(spacing: 14) {
+//            Rectangle()
+//                .fill(
+//                    LinearGradient(
+//                        colors: [Color.cyan, Color.blue],
+//                        startPoint: .top,
+//                        endPoint: .bottom
+//                    )
+//                )
+//                .frame(width: 6, height: headingHeight(for: level))
+//                .cornerRadius(3)
+//                .shadow(color: Color.cyan.opacity(0.3), radius: 2, x: 0, y: 0)
+//
+//            headingTextView(level: level, text: text)
+//
+//            Spacer()
+//        }
+//        .padding(.vertical, 12)
+//        .padding(.horizontal, 8)
+//        .background(
+//            RoundedRectangle(cornerRadius: 10)
+//                .fill(Color.white.opacity(0.08))
+//        )
+//    }
+//
+//    @ViewBuilder
+//    private func headingTextView(level: Int, text: String) -> some View {
+//        VStack(alignment: .leading, spacing: 4) {
+//            switch level {
+//            case 1:
+//                Text(formatHeadingText(text))
+//                    .font(.title2)
+//                    .fontWeight(.bold)
+//                    .foregroundColor(.white)
+//                    .lineSpacing(6)
+//                    .shadow(color: .black.opacity(0.2), radius: 1, x: 0, y: 1)
+//            case 2:
+//                Text(formatHeadingText(text))
+//                    .font(.title3)
+//                    .fontWeight(.semibold)
+//                    .foregroundColor(.white)
+//                    .lineSpacing(5)
+//                    .shadow(color: .black.opacity(0.15), radius: 1, x: 0, y: 1)
+//            case 3:
+//                Text(formatHeadingText(text))
+//                    .font(.headline)
+//                    .fontWeight(.semibold)
+//                    .foregroundColor(.white.opacity(0.95))
+//                    .lineSpacing(4)
+//            default:
+//                Text(formatHeadingText(text))
+//                    .font(.subheadline)
+//                    .fontWeight(.medium)
+//                    .foregroundColor(.white.opacity(0.9))
+//                    .lineSpacing(3)
+//            }
+//        }
+//    }
+//
+//    private func formatHeadingText(_ text: String) -> String {
+//        var formatted = text.trimmingCharacters(in: .whitespacesAndNewlines)
+//
+//        // Fix multiple spaces
+//        formatted = formatted.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+//
+//        // Remove trailing periods from headings (headings typically don't have periods)
+//        while formatted.hasSuffix(".") {
+//            formatted = String(formatted.dropLast())
+//        }
+//
+//        return formatted
+//    }
+//
+//    private func headingHeight(for level: Int) -> CGFloat {
+//        switch level {
+//        case 1: return 40
+//        case 2: return 36
+//        case 3: return 32
+//        default: return 28
+//        }
+//    }
+//}
 struct ParsedAlertView: View {
     let blocks: [AlertBlock]
 
@@ -2132,13 +2896,13 @@ struct ParsedAlertView: View {
 
         static let headerHPadding: CGFloat = 16
         static let headerVPadding: CGFloat = 12
-        static let headerFontSize: CGFloat = 19
+        static let headerFontSize: CGFloat = 15
         static let chevronSize: CGFloat = 14
 
-        static let rowHPadding: CGFloat = 16
-        static let rowVPadding: CGFloat = 12
-        static let sectionTitleSize: CGFloat = 16
-        static let bodySize: CGFloat = 15
+        static let rowHPadding: CGFloat = 10
+        static let rowVPadding: CGFloat = 6
+        static let sectionTitleSize: CGFloat = 13
+        static let bodySize: CGFloat = 12
         static let lineSpacing: CGFloat = 2
         static let descriptionItemSpacing: CGFloat = 12
         static let dividerOpacity: Double = 0.14
@@ -2220,12 +2984,6 @@ struct ParsedAlertView: View {
                         .fontWeight(.semibold)
                         .foregroundColor(.white)
                         .lineLimit(2)
-
-                    Spacer()
-
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: Metrics.chevronSize, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.55))
                 }
                 .padding(.horizontal, Metrics.headerHPadding)
                 .padding(.vertical, Metrics.headerVPadding)
@@ -2482,7 +3240,7 @@ struct AlertSectionRow: View {
     let sourceLink: AlertLink?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             switch section.kind {
             case .severity:
                 severityHeader
@@ -2572,7 +3330,7 @@ struct AlertSectionRow: View {
     }
 }
 
-
+// A minimal WKWebView that loads the alert URL and parses content for native rendering
 struct AlertWebView: NSViewRepresentable {
     let url: URL
     @Binding var isLoading: Bool
@@ -3582,54 +4340,12 @@ struct WindSpeedChartView: View {
 }
 
 // MARK: - Weather Map View
-enum WeatherMapLayer: String, CaseIterable, Identifiable {
-    case temperature = "Temperature"
-    case precipitation = "Precipitation"
-    case wind = "Wind"
-
-    var id: String { rawValue }
-    var systemImage: String {
-        switch self {
-        case .temperature: return "thermometer"
-        case .precipitation: return "cloud.rain"
-        case .wind: return "wind"
-        }
-    }
-}
-
-struct WeatherMapSample: Identifiable, Hashable, Equatable {
-    let id = UUID()
-    let coordinate: CLLocationCoordinate2D
-    let value: Double
-
-    static func == (lhs: WeatherMapSample, rhs: WeatherMapSample) -> Bool {
-        return lhs.id == rhs.id &&
-               lhs.value == rhs.value &&
-               lhs.coordinate.latitude == rhs.coordinate.latitude &&
-               lhs.coordinate.longitude == rhs.coordinate.longitude
-    }
-
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
-        hasher.combine(value)
-        hasher.combine(coordinate.latitude)
-        hasher.combine(coordinate.longitude)
-    }
-}
-
 struct WeatherMapView: View {
     let location: CLLocation?
     @ObservedObject var viewModel: WeatherViewModel
-    
     @State private var region: MKCoordinateRegion
     @State private var mapType: MKMapType = .standard
-    @State private var layer: WeatherMapLayer = .temperature
-    @State private var isMapInteractive: Bool = false
-    @State private var samples: [WeatherMapSample] = []
-    @State private var isSampling: Bool = false
-    @State private var sampleError: String? = nil
-    
-    @State private var samplingTask: Task<Void, Never>? = nil
+    @State private var showControls = true
     
     init(location: CLLocation?, viewModel: WeatherViewModel) {
         self.location = location
@@ -3638,473 +4354,134 @@ struct WeatherMapView: View {
         if let location = location {
             _region = State(initialValue: MKCoordinateRegion(
                 center: location.coordinate,
-                span: MKCoordinateSpan(latitudeDelta: 4.5, longitudeDelta: 4.5)
+                span: MKCoordinateSpan(latitudeDelta: 5, longitudeDelta: 5)
             ))
         } else {
             _region = State(initialValue: MKCoordinateRegion(
                 center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
-                span: MKCoordinateSpan(latitudeDelta: 4.5, longitudeDelta: 4.5)
+                span: MKCoordinateSpan(latitudeDelta: 5, longitudeDelta: 5)
             ))
         }
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            header
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Weather Map")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                Picker("Map Type", selection: $mapType) {
+                    Text("Standard").tag(MKMapType.standard)
+                    Text("Satellite").tag(MKMapType.satellite)
+                    Text("Hybrid").tag(MKMapType.hybrid)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 250)
+            }
+            .padding(.horizontal)
             
-            ZStack(alignment: .topLeading) {
+            ZStack(alignment: .topTrailing) {
                 WeatherMapRepresentable(
                     region: $region,
                     mapType: $mapType,
                     location: location,
                     weather: viewModel.currentWeather,
-                    locationName: viewModel.locationName,
-                    layer: layer,
-                    samples: samples
+                    locationName: viewModel.locationName
                 )
-                .frame(height: 320)
-                .cornerRadius(14)
+                .frame(height: 400)
+                .cornerRadius(12)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(Color.white.opacity(0.20), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
                 )
-                    .padding(.horizontal, 20)
+                .onChange(of: location) { oldValue, newValue in
+                    if let newLocation = newValue {
+                        region = MKCoordinateRegion(
+                            center: newLocation.coordinate,
+                            span: MKCoordinateSpan(latitudeDelta: 5, longitudeDelta: 5)
+                        )
+                    }
+                }
                 
-                legendPill
-                    .padding(10)
-                
-                mapInteractionControls
-                    .padding(10)
-                
-                mapInteractionHintOverlay
+                if showControls {
+                    VStack(spacing: 8) {
+                        Button(action: {
+                            if let location = location {
+                                region = MKCoordinateRegion(
+                                    center: location.coordinate,
+                                    span: MKCoordinateSpan(latitudeDelta: 5, longitudeDelta: 5)
+                                )
+                            }
+                        }) {
+                            Image(systemName: "location.fill")
+                                .font(.system(size: 14))
+                                .foregroundColor(.white)
+                                .padding(8)
+                                .background(Color.blue.opacity(0.8))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Center on location")
+                        
+                        Button(action: {
+                            var newSpan = region.span
+                            newSpan.latitudeDelta *= 0.5
+                            newSpan.longitudeDelta *= 0.5
+                            region.span = newSpan
+                        }) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(8)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Zoom in")
+                        
+                        Button(action: {
+                            var newSpan = region.span
+                            newSpan.latitudeDelta *= 2.0
+                            newSpan.longitudeDelta *= 2.0
+                            region.span = newSpan
+                        }) {
+                            Image(systemName: "minus")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(8)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Zoom out")
+                    }
+                    .padding(12)
+                }
             }
-            .padding(.horizontal, 12)
-            .onAppear { scheduleSampling(reason: "appear") }
-            .onChange(of: region.center.latitude) { _ in scheduleSampling(reason: "region change") }
-            .onChange(of: region.center.longitude) { _ in scheduleSampling(reason: "region change") }
-            .onChange(of: region.span.latitudeDelta) { _ in scheduleSampling(reason: "region change") }
-            .onChange(of: region.span.longitudeDelta) { _ in scheduleSampling(reason: "region change") }
-            .onChange(of: layer) { _ in scheduleSampling(reason: "layer change") }
-            .onChange(of: location?.coordinate.latitude ?? 0) { _ in scheduleSampling(reason: "location change") }
-            .onChange(of: location?.coordinate.longitude ?? 0) { _ in scheduleSampling(reason: "location change") }
+            .padding(.horizontal)
             
             if let weather = viewModel.currentWeather {
                 WeatherMapInfoPanel(weather: weather, location: location)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal)
             } else {
                 Text("No weather data available")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal)
             }
         }
-    }
-    
-    private var header: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: layer.systemImage)
-                    .symbolRenderingMode(.hierarchical)
-                    .foregroundStyle(.white.opacity(0.95))
-                Text("Map")
-                    .font(.title2)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-            }
-            
-            Spacer()
-            
-            Picker("Layer", selection: $layer) {
-                ForEach(WeatherMapLayer.allCases) { layer in
-                    Text(layer.rawValue).tag(layer)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 320)
-            .padding(.horizontal, 50)
-            
-            Picker("Map Type", selection: $mapType) {
-                Text("Standard").tag(MKMapType.standard)
-                Text("Satellite").tag(MKMapType.satellite)
-                Text("Hybrid").tag(MKMapType.hybrid)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 320)
-        }
-        .padding(.horizontal, 4)
-        .padding(.top, 2)
-    }
-    
-    
-    private var mapInteractionControls: some View {
-        HStack {
-            Spacer()
-            if isMapInteractive {
-                Button {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                        isMapInteractive = false
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "hand.tap.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("Done")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.22), lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Disable map interaction")
-            } else {
-                Button {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.9)) {
-                        isMapInteractive = true
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "hand.tap")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("Interact")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.white.opacity(0.22), lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Enable map interaction")
-            }
-        }
-    }
-    
-    private var mapInteractionHintOverlay: some View {
-        Group {
-            if !isMapInteractive {
-                VStack(spacing: 8) {
-                    Text("Scroll to move through the page")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.white)
-                    Text("Click “Interact” to pan/zoom the map")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.75))
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .allowsHitTesting(false)
-                .transition(.opacity)
-            }
-        }
-    }
-    
-    
-    private var legendPill: some View {
-        let (label, detail) = legendText()
-        let values = samples.map(\.value)
-        let minV = values.min() ?? 0
-        let maxV = values.max() ?? 0
-        
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: layer.systemImage)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.95))
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(label)
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                    Text(detail)
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.75))
-                        .lineLimit(2)
-                }
-                
-                Spacer(minLength: 10)
-                
-                if isSampling {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .scaleEffect(0.7)
-                        .tint(.white.opacity(0.9))
-                }
-            }
-            
-            if sampleError == nil, !samples.isEmpty {
-                // Compact color legend matching the map overlay colors.
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(legendGradient)
-                    .frame(height: 10)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
-                    )
-                    .accessibilityHidden(true)
-                
-                HStack {
-                    Text(legendMinLabel(minV))
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.75))
-                    Spacer()
-                    Text(legendMaxLabel(maxV))
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.75))
-                }
-                .accessibilityHidden(true)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .background(.ultraThinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.white.opacity(0.22), lineWidth: 1)
-        )
-        .frame(maxWidth: 285, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(label). \(detail)")
-    }
-    
-    private var legendGradient: LinearGradient {
-        switch layer {
-        case .temperature:
-            return LinearGradient(colors: [Color(nsColor: lerpHSB(h1: 0.58, s1: 0.85, b1: 0.95, h2: 0.03, s2: 0.90, b2: 0.98, t: 0)),
-                                           Color(nsColor: lerpHSB(h1: 0.58, s1: 0.85, b1: 0.95, h2: 0.03, s2: 0.90, b2: 0.98, t: 0.5)),
-                                           Color(nsColor: lerpHSB(h1: 0.58, s1: 0.85, b1: 0.95, h2: 0.03, s2: 0.90, b2: 0.98, t: 1))],
-                                  startPoint: .leading, endPoint: .trailing)
-        case .precipitation:
-            return LinearGradient(colors: [Color(nsColor: lerpHSB(h1: 0.52, s1: 0.75, b1: 0.95, h2: 0.72, s2: 0.80, b2: 0.92, t: 0)),
-                                           Color(nsColor: lerpHSB(h1: 0.52, s1: 0.75, b1: 0.95, h2: 0.72, s2: 0.80, b2: 0.92, t: 0.5)),
-                                           Color(nsColor: lerpHSB(h1: 0.52, s1: 0.75, b1: 0.95, h2: 0.72, s2: 0.80, b2: 0.92, t: 1))],
-                                  startPoint: .leading, endPoint: .trailing)
-        case .wind:
-            return LinearGradient(colors: [Color(nsColor: lerpHSB(h1: 0.33, s1: 0.75, b1: 0.95, h2: 0.10, s2: 0.90, b2: 0.98, t: 0)),
-                                           Color(nsColor: lerpHSB(h1: 0.33, s1: 0.75, b1: 0.95, h2: 0.10, s2: 0.90, b2: 0.98, t: 0.5)),
-                                           Color(nsColor: lerpHSB(h1: 0.33, s1: 0.75, b1: 0.95, h2: 0.10, s2: 0.90, b2: 0.98, t: 1))],
-                                  startPoint: .leading, endPoint: .trailing)
-        }
-    }
-    
-    private func legendMinLabel(_ v: Double) -> String {
-        switch layer {
-        case .temperature: return formatTemp(v)
-        case .precipitation: return formatPrecip(v)
-        case .wind: return formatWind(v)
-        }
-    }
-    
-    private func legendMaxLabel(_ v: Double) -> String {
-        switch layer {
-        case .temperature: return formatTemp(v)
-        case .precipitation: return formatPrecip(v)
-        case .wind: return formatWind(v)
-        }
-    }
-    
-    
-    private func legendText() -> (String, String) {
-        if let err = sampleError {
-            return ("\(layer.rawValue)", err)
-        }
-        guard !samples.isEmpty else {
-            return ("\(layer.rawValue)", "Fetching nearby values…")
-        }
-        
-        let values = samples.map(\.value)
-        let minV = values.min() ?? 0
-        let maxV = values.max() ?? 0
-        
-        switch layer {
-        case .temperature:
-            return ("Temperature", "\(formatTemp(minV)) – \(formatTemp(maxV))")
-        case .precipitation:
-            return ("Precipitation", "\(formatPrecip(minV)) – \(formatPrecip(maxV))")
-        case .wind:
-            return ("Wind", "\(formatWind(minV)) – \(formatWind(maxV))")
-        }
-    }
-    
-    private func scheduleSampling(reason: String) {
-        samplingTask?.cancel()
-        samplingTask = Task { @MainActor in
-            // Small debounce to avoid hammering WeatherKit while dragging the map.
-            try? await Task.sleep(nanoseconds: 220_000_000)
-            await refreshSamples()
-        }
-    }
-    
-    @MainActor
-    private func refreshSamples() async {
-        guard !Task.isCancelled else { return }
-        
-        sampleError = nil
-        isSampling = true
-        
-        let coords = makeSampleCoordinates(for: region, maxPoints: 25)
-        if coords.isEmpty {
-            isSampling = false
-            samples = []
-            return
-        }
-        
-        do {
-            let fetched = try await fetchSamples(for: coords, layer: layer)
-            if Task.isCancelled { return }
-            // Stable ordering for nicer animation/overlay updates.
-            samples = fetched.sorted { $0.coordinate.latitude == $1.coordinate.latitude ? $0.coordinate.longitude < $1.coordinate.longitude : $0.coordinate.latitude < $1.coordinate.latitude }
-        } catch {
-            if Task.isCancelled { return }
-            sampleError = "Couldn’t load map layer."
-            samples = []
-        }
-        
-        isSampling = false
-    }
-    
-    private func fetchSamples(for coords: [CLLocationCoordinate2D], layer: WeatherMapLayer) async throws -> [WeatherMapSample] {
-        let service = WeatherService.shared
-        
-        return try await withThrowingTaskGroup(of: WeatherMapSample?.self) { group in
-            // A light concurrency cap so we stay responsive and don’t flood the API.
-            let chunkSize = 6
-            var results: [WeatherMapSample] = []
-            var idx = 0
-            
-            func addChunk() {
-                let end = min(idx + chunkSize, coords.count)
-                guard idx < end else { return }
-                for c in coords[idx..<end] {
-                    group.addTask {
-                        let loc = CLLocation(latitude: c.latitude, longitude: c.longitude)
-                        let weather = try await service.weather(for: loc)
-                        let cw = weather.currentWeather
-                        let v = extractValue(from: cw, layer: layer)
-                        return WeatherMapSample(coordinate: c, value: v)
-                    }
-                }
-                idx = end
-            }
-            
-            addChunk()
-            while let sample = try await group.next() {
-                if let sample { results.append(sample) }
-                if idx < coords.count {
-                    addChunk()
-                }
-            }
-            return results
-        }
-    }
-    
-    private func makeSampleCoordinates(for region: MKCoordinateRegion, maxPoints: Int) -> [CLLocationCoordinate2D] {
-        // Choose grid density based on zoom level.
-        let latDelta = max(region.span.latitudeDelta, 0.001)
-        let longDelta = max(region.span.longitudeDelta, 0.001)
-        
-        // Clamp to keep requests bounded.
-        let gridSize: Int
-        if max(latDelta, longDelta) > 10 { gridSize = 4 }
-        else if max(latDelta, longDelta) > 6 { gridSize = 5 }
-        else { gridSize = 6 }
-        
-        let count = min(maxPoints, gridSize * gridSize)
-        let side = Int(Double(count).squareRoot())
-        
-        let latStep = latDelta / Double(side - 1)
-        let lonStep = longDelta / Double(side - 1)
-        
-        let minLat = region.center.latitude - (latDelta / 2)
-        let minLon = region.center.longitude - (longDelta / 2)
-        
-        var coords: [CLLocationCoordinate2D] = []
-        coords.reserveCapacity(side * side)
-        
-        for i in 0..<side {
-            for j in 0..<side {
-                coords.append(CLLocationCoordinate2D(
-                    latitude: minLat + (Double(i) * latStep),
-                    longitude: minLon + (Double(j) * lonStep)
-                ))
-            }
-        }
-        return coords
-    }
-    
-    private func extractValue(from weather: CurrentWeather, layer: WeatherMapLayer) -> Double {
-        switch layer {
-        case .temperature:
-            let useCelsius = UserDefaults.standard.bool(forKey: "useCelsius")
-            let temp = useCelsius ? weather.temperature.converted(to: .celsius).value : weather.temperature.converted(to: .fahrenheit).value
-            return temp
-        case .precipitation:
-            // On macOS WeatherKit, precipitationIntensity is available in CurrentWeather.
-            // Values are typically in mm/hr. We clamp for more readable mapping.
-            return max(0, min(weather.precipitationIntensity.value, 25))
-        case .wind:
-            // m/s is a good default. Convert to km/h for readability.
-            let kmh = weather.wind.speed.converted(to: .kilometersPerHour).value
-            return max(0, min(kmh, 120))
-        }
-    }
-    
-    // HSB interpolation matching the map overlay colors.
-    private func lerpHSB(h1: CGFloat, s1: CGFloat, b1: CGFloat, h2: CGFloat, s2: CGFloat, b2: CGFloat, t: Double) -> NSColor {
-        let tt = CGFloat(max(0, min(1, t)))
-        let h = h1 + (h2 - h1) * tt
-        let s = s1 + (s2 - s1) * tt
-        let b = b1 + (b2 - b1) * tt
-        return NSColor(calibratedHue: h, saturation: s, brightness: b, alpha: 1.0)
-    }
-    
-    private func formatTemp(_ v: Double) -> String {
-        let rounded = Int(v.rounded())
-        let useCelsius = UserDefaults.standard.bool(forKey: "useCelsius")
-        return "\(rounded)°\(useCelsius ? "C" : "F")"
-    }
-    
-    private func formatWind(_ v: Double) -> String {
-        let rounded = Int(v.rounded())
-        return "\(rounded) km/h"
-    }
-    
-    private func formatPrecip(_ v: Double) -> String {
-        // mm/hr
-        let rounded = String(format: "%.1f", v)
-        return "\(rounded) mm/h"
     }
 }
-
-
 
 struct WeatherMapInfoPanel: View {
     let weather: CurrentWeather
     let location: CLLocation?
     @AppStorage("useCelsius") private var useCelsius: Bool = false
-
+    
     var body: some View {
         VStack(spacing: 12) {
             HStack(spacing: 20) {
@@ -4113,7 +4490,7 @@ struct WeatherMapInfoPanel: View {
                         .font(.title3)
                         .foregroundColor(.white)
                         .symbolRenderingMode(.hierarchical)
-
+                    
                     VStack(alignment: .leading, spacing: 2) {
                         Text(weather.condition.description)
                             .font(.subheadline)
@@ -4124,20 +4501,20 @@ struct WeatherMapInfoPanel: View {
                             .foregroundColor(.white)
                     }
                 }
-
+                
                 Spacer()
-
+                
                 HStack(spacing: 16) {
                     VStack(spacing: 2) {
                         Image(systemName: "wind")
                             .font(.caption)
                             .foregroundColor(.white.opacity(0.8))
-                        Text(weather.wind.speed.converted(to: .kilometersPerHour).formatted())
+                        Text(weather.wind.speed.formatted())
                             .font(.caption2)
                             .foregroundColor(.white)
                             .lineLimit(1)
                     }
-
+                    
                     VStack(spacing: 2) {
                         Image(systemName: "humidity.fill")
                             .font(.caption)
@@ -4146,7 +4523,7 @@ struct WeatherMapInfoPanel: View {
                             .font(.caption2)
                             .foregroundColor(.white)
                     }
-
+                    
                     VStack(spacing: 2) {
                         Image(systemName: "eye.fill")
                             .font(.caption)
@@ -4159,16 +4536,15 @@ struct WeatherMapInfoPanel: View {
                 }
             }
             .padding()
-            .background(Color.white.opacity(0.20))
+            .background(Color.white.opacity(0.2))
             .cornerRadius(10)
             .overlay(
                 RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.white.opacity(0.30), lineWidth: 1)
-            ).frame(width: 410)
-
+                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
+            )
+            
             if let location = location {
                 HStack(spacing: 20) {
-                    Spacer()
                     HStack(spacing: 4) {
                         Image(systemName: "location.fill")
                             .font(.caption2)
@@ -4181,7 +4557,7 @@ struct WeatherMapInfoPanel: View {
                             .foregroundColor(.white)
                             .fontWeight(.medium)
                     }
-
+                    
                     HStack(spacing: 4) {
                         Text("Long:")
                             .font(.caption)
@@ -4191,14 +4567,14 @@ struct WeatherMapInfoPanel: View {
                             .foregroundColor(.white)
                             .fontWeight(.medium)
                     }
-
+                    
                     Spacer()
                 }
                 .padding(.horizontal, 4)
             }
         }
     }
-
+    
     private func formattedTemperature(_ temp: Measurement<UnitTemperature>) -> Int {
         if useCelsius {
             return Int(temp.converted(to: .celsius).value)
@@ -4208,237 +4584,173 @@ struct WeatherMapInfoPanel: View {
     }
 }
 
-// MARK: - Custom MapKit Representable
-// MARK: - Custom MapKit Representable
+// MARK: - Non-Scrolling MapView
+class NonScrollingMapView: MKMapView {
+    override func scrollWheel(with event: NSEvent) {
+        // Pass scroll events to the next responder (the SwiftUI ScrollView)
+        // instead of letting the map zoom
+        nextResponder?.scrollWheel(with: event)
+    }
+}
 
+// MARK: - Custom MapKit Representable
 struct WeatherMapRepresentable: NSViewRepresentable {
     @Binding var region: MKCoordinateRegion
     @Binding var mapType: MKMapType
     let location: CLLocation?
     let weather: CurrentWeather?
     let locationName: String?
-    let layer: WeatherMapLayer
-    let samples: [WeatherMapSample]
-
+    
     func makeNSView(context: Context) -> MKMapView {
-        let mapView = MKMapView()
+        let mapView = NonScrollingMapView()
         mapView.delegate = context.coordinator
         mapView.mapType = mapType
         mapView.showsCompass = true
         mapView.showsScale = true
         mapView.showsZoomControls = false
-        mapView.pointOfInterestFilter = .excludingAll
-
-        // Set an initial region.
-        mapView.setRegion(region, animated: false)
-
-        // Center pin if we have a main location.
+        
         if let location = location {
+            let region = MKCoordinateRegion(
+                center: location.coordinate,
+                span: MKCoordinateSpan(latitudeDelta: 5, longitudeDelta: 5)
+            )
+            mapView.setRegion(region, animated: false)
+            
             let annotation = WeatherAnnotation(
                 coordinate: location.coordinate,
                 weather: weather,
                 locationName: locationName
             )
             mapView.addAnnotation(annotation)
-        }
-
-        addSampleOverlays(to: mapView, coordinator: context.coordinator)
-        return mapView
-    }
-
-    func updateNSView(_ mapView: MKMapView, context: Context) {
-        mapView.mapType = mapType
-
-        // Avoid constant region churn while the user pans/zooms.
-        if !approximatelyEqual(mapView.region, region) {
-            mapView.setRegion(region, animated: true)
-        }
-
-        // Update main annotation.
-        mapView.removeAnnotations(mapView.annotations)
-        if let location = location {
-            let annotation = WeatherAnnotation(
-                coordinate: location.coordinate,
-                weather: weather,
-                locationName: locationName
-            )
-            mapView.addAnnotation(annotation)
-        }
-
-        // Update overlays (samples).
-        removeSampleOverlays(from: mapView, coordinator: context.coordinator)
-        addSampleOverlays(to: mapView, coordinator: context.coordinator)
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    private func addSampleOverlays(to mapView: MKMapView, coordinator: Coordinator) {
-        guard !samples.isEmpty else { return }
-
-        let values = samples.map(\.value)
-        let minV = values.min() ?? 0
-        let maxV = values.max() ?? 1
-
-        let radius = overlayRadius(for: region, sampleCount: samples.count)
-        for s in samples {
-            let circle = MKCircle(center: s.coordinate, radius: radius)
-            let color = coordinator.color(for: s.value, minV: minV, maxV: maxV, layer: layer)
-            coordinator.setColor(color, for: circle)
+            
+            let circle = MKCircle(center: location.coordinate, radius: 50000)
             mapView.addOverlay(circle)
         }
+        
+        return mapView
     }
-
-    private func removeSampleOverlays(from mapView: MKMapView, coordinator: Coordinator) {
-        let overlays = mapView.overlays
-        if overlays.isEmpty { return }
-        overlays.forEach { coordinator.clearColor(for: $0) }
-        mapView.removeOverlays(overlays)
+    
+    func updateNSView(_ nsView: MKMapView, context: Context) {
+        nsView.mapType = mapType
+        nsView.setRegion(region, animated: true)
+        
+        nsView.removeAnnotations(nsView.annotations)
+        nsView.removeOverlays(nsView.overlays)
+        
+        if let location = location {
+            let annotation = WeatherAnnotation(
+                coordinate: location.coordinate,
+                weather: weather,
+                locationName: locationName
+            )
+            nsView.addAnnotation(annotation)
+            
+            let circle = MKCircle(center: location.coordinate, radius: 50000)
+            nsView.addOverlay(circle)
+        }
     }
-
-    private func overlayRadius(for region: MKCoordinateRegion, sampleCount: Int) -> CLLocationDistance {
-        // Roughly set radius to ~45% of the sample cell size so circles blend like a layer.
-        let spanKm = max(region.span.latitudeDelta, 0.001) * 111.0
-        let side = max(2, Int(Double(sampleCount).squareRoot()))
-        let cellKm = spanKm / Double(side)
-        return max(12_000, min(70_000, cellKm * 1000.0 * 0.45))
-    }
-
-    private func approximatelyEqual(_ a: MKCoordinateRegion, _ b: MKCoordinateRegion) -> Bool {
-        let eps = 0.0005
-        return abs(a.center.latitude - b.center.latitude) < eps &&
-               abs(a.center.longitude - b.center.longitude) < eps &&
-               abs(a.span.latitudeDelta - b.span.latitudeDelta) < eps &&
-               abs(a.span.longitudeDelta - b.span.longitudeDelta) < eps
-    }
-
-    // MARK: - Coordinator
+    
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    
     class Coordinator: NSObject, MKMapViewDelegate {
-        private var overlayColors: [ObjectIdentifier: NSColor] = [:]
         var parent: WeatherMapRepresentable
-
+        
         init(_ parent: WeatherMapRepresentable) { self.parent = parent }
-
-        func setColor(_ color: NSColor, for overlay: MKOverlay) {
-            overlayColors[ObjectIdentifier(overlay as AnyObject)] = color
-        }
-
-        func clearColor(for overlay: MKOverlay) {
-            overlayColors.removeValue(forKey: ObjectIdentifier(overlay as AnyObject))
-        }
-
+        
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             DispatchQueue.main.async { self.parent.region = mapView.region }
         }
-
+        
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
             let identifier = "WeatherLocation"
             var annotationView = mapView.dequeueReusableAnnotationView(withIdentifier: identifier)
-
+            
             if annotationView == nil {
                 annotationView = MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: identifier)
                 annotationView?.canShowCallout = true
+                
+                if let markerView = annotationView as? MKMarkerAnnotationView,
+                   let weatherAnnotation = annotation as? WeatherAnnotation {
+                    if let weather = weatherAnnotation.weather {
+                        let color = colorForWeather(weather)
+                        markerView.markerTintColor = color
+                        markerView.glyphImage = NSImage(systemSymbolName: weather.symbolName, accessibilityDescription: "Weather")
+                        let detailView = createWeatherDetailView(weather: weather)
+                        markerView.detailCalloutAccessoryView = detailView
+                    } else {
+                        markerView.markerTintColor = .systemBlue
+                        markerView.glyphImage = NSImage(systemSymbolName: "cloud.sun.fill", accessibilityDescription: "Weather Location")
+                    }
+                    markerView.titleVisibility = .visible
+                    markerView.subtitleVisibility = .visible
+                }
             } else {
                 annotationView?.annotation = annotation
-            }
-
-            if let markerView = annotationView as? MKMarkerAnnotationView,
-               let weatherAnnotation = annotation as? WeatherAnnotation {
-                if let weather = weatherAnnotation.weather {
-                    markerView.markerTintColor = colorForCenterPin(weather)
-                    markerView.glyphImage = NSImage(systemSymbolName: weather.symbolName, accessibilityDescription: "Weather")
-                    markerView.detailCalloutAccessoryView = createWeatherDetailView(weather: weather)
-                } else {
-                    markerView.markerTintColor = .systemBlue
-                    markerView.glyphImage = NSImage(systemSymbolName: "cloud.sun.fill", accessibilityDescription: "Weather Location")
+                if let markerView = annotationView as? MKMarkerAnnotationView,
+                   let weatherAnnotation = annotation as? WeatherAnnotation {
+                    if let weather = weatherAnnotation.weather {
+                        let color = colorForWeather(weather)
+                        markerView.markerTintColor = color
+                        markerView.glyphImage = NSImage(systemSymbolName: weather.symbolName, accessibilityDescription: "Weather")
+                        let detailView = createWeatherDetailView(weather: weather)
+                        markerView.detailCalloutAccessoryView = detailView
+                    }
                 }
-                markerView.titleVisibility = .visible
-                markerView.subtitleVisibility = .visible
             }
             return annotationView
         }
-
+        
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let circle = overlay as? MKCircle {
                 let renderer = MKCircleRenderer(circle: circle)
-                let key = ObjectIdentifier(overlay as AnyObject)
-                let c = overlayColors[key] ?? NSColor.systemBlue
-
-                // Subtle, layered look (similar to a "weather layer").
-                renderer.fillColor = c.withAlphaComponent(0.16)
-                renderer.strokeColor = c.withAlphaComponent(0.05)
-                renderer.lineWidth = 1
+                if let weather = parent.weather {
+                    let weatherColor = colorForWeather(weather)
+                    renderer.fillColor = weatherColor.withAlphaComponent(0.15)
+                    renderer.strokeColor = weatherColor.withAlphaComponent(0.4)
+                } else {
+                    renderer.fillColor = NSColor.systemBlue.withAlphaComponent(0.1)
+                    renderer.strokeColor = NSColor.systemBlue.withAlphaComponent(0.3)
+                }
+                renderer.lineWidth = 2
                 return renderer
             }
             return MKOverlayRenderer(overlay: overlay)
         }
-
-        // MARK: - Color mapping
-        func color(for value: Double, minV: Double, maxV: Double, layer: WeatherMapLayer) -> NSColor {
-            // Normalize to 0...1 with a bit of range protection.
-            let denom = max(0.0001, (maxV - minV))
-            var t = (value - minV) / denom
-            t = max(0, min(1, t))
-
-            switch layer {
-            case .temperature:
-                // Cool → warm (blue → orange/red) using HSB interpolation.
-                return lerpHSB(h1: 0.58, s1: 0.85, b1: 0.95, h2: 0.03, s2: 0.90, b2: 0.98, t: t)
-            case .precipitation:
-                // Light → heavy precipitation (teal/blue → indigo/purple).
-                return lerpHSB(h1: 0.52, s1: 0.75, b1: 0.95, h2: 0.72, s2: 0.80, b2: 0.92, t: t)
-            case .wind:
-                // Calm → strong wind (green → yellow/orange).
-                return lerpHSB(h1: 0.33, s1: 0.75, b1: 0.95, h2: 0.10, s2: 0.90, b2: 0.98, t: t)
+        
+        private func colorForWeather(_ weather: CurrentWeather) -> NSColor {
+            let temp = weather.temperature.value
+            let condition = weather.condition.description.lowercased()
+            if condition.contains("clear") || condition.contains("sunny") {
+                return temp > 75 ? .systemOrange : .systemYellow
+            } else if condition.contains("rain") || condition.contains("drizzle") {
+                return .systemBlue
+            } else if condition.contains("snow") {
+                return .systemCyan
+            } else if condition.contains("storm") || condition.contains("thunder") {
+                return .systemPurple
+            } else if condition.contains("cloud") {
+                return .systemGray
+            } else {
+                return .systemBlue
             }
         }
-
-        private func lerpHSB(h1: CGFloat, s1: CGFloat, b1: CGFloat, h2: CGFloat, s2: CGFloat, b2: CGFloat, t: Double) -> NSColor {
-            let tt = CGFloat(t)
-            let h = h1 + (h2 - h1) * tt
-            let s = s1 + (s2 - s1) * tt
-            let b = b1 + (b2 - b1) * tt
-            return NSColor(calibratedHue: h, saturation: s, brightness: b, alpha: 1.0)
-        }
-
-        private func colorForCenterPin(_ weather: CurrentWeather) -> NSColor {
-            // Keep the center pin aligned to the layer but still readable.
-            switch parent.layer {
-            case .temperature:
-                let useCelsius = UserDefaults.standard.bool(forKey: "useCelsius")
-                let v = useCelsius ? weather.temperature.converted(to: .celsius).value : weather.temperature.converted(to: .fahrenheit).value
-                // A simple warm/cool split.
-                return v >= (useCelsius ? 18 : 65) ? .systemOrange : .systemTeal
-            case .precipitation:
-                return weather.precipitationIntensity.value > 1.5 ? .systemIndigo : .systemBlue
-            case .wind:
-                return weather.wind.speed.converted(to: .kilometersPerHour).value > 25 ? .systemOrange : .systemGreen
-            }
-        }
-
+        
         private func createWeatherDetailView(weather: CurrentWeather) -> NSView {
             let useCelsius = UserDefaults.standard.bool(forKey: "useCelsius")
             let temp = useCelsius ? Int(weather.temperature.converted(to: .celsius).value) : Int(weather.temperature.converted(to: .fahrenheit).value)
-
-            let view = NSView(frame: NSRect(x: 0, y: 0, width: 210, height: 84))
-
+            let view = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))
             let tempLabel = NSTextField(labelWithString: "\(temp)°")
-            tempLabel.font = NSFont.systemFont(ofSize: 26, weight: .bold)
-            tempLabel.frame = NSRect(x: 10, y: 50, width: 190, height: 30)
+            tempLabel.font = NSFont.systemFont(ofSize: 24, weight: .bold)
+            tempLabel.frame = NSRect(x: 10, y: 50, width: 180, height: 30)
             view.addSubview(tempLabel)
-
             let conditionLabel = NSTextField(labelWithString: weather.condition.description)
             conditionLabel.font = NSFont.systemFont(ofSize: 12)
-            conditionLabel.textColor = NSColor.secondaryLabelColor
-            conditionLabel.frame = NSRect(x: 10, y: 34, width: 190, height: 16)
+            conditionLabel.frame = NSRect(x: 10, y: 35, width: 180, height: 15)
             view.addSubview(conditionLabel)
-
-            let windKmh = Int(weather.wind.speed.converted(to: .kilometersPerHour).value.rounded())
-            let infoLabel = NSTextField(labelWithString: "💨 \(windKmh) km/h   💧 \(Int(weather.humidity * 100))%")
+            let infoLabel = NSTextField(labelWithString: "💨 \(weather.wind.speed.formatted())  💧 \(Int(weather.humidity * 100))%")
             infoLabel.font = NSFont.systemFont(ofSize: 11)
-            infoLabel.textColor = NSColor.secondaryLabelColor
-            infoLabel.frame = NSRect(x: 10, y: 15, width: 190, height: 16)
+            infoLabel.frame = NSRect(x: 10, y: 15, width: 180, height: 15)
             view.addSubview(infoLabel)
-
             return view
         }
     }
@@ -4498,6 +4810,136 @@ struct SavedLocation: Codable, Identifiable, Equatable {
     var clLocation: CLLocation { CLLocation(latitude: latitude, longitude: longitude) }
 }
 
+// MARK: - Saved Location Card View
+struct SavedLocationCard: View {
+    let location: SavedLocation
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onRemove: () -> Void
+    
+    @State private var currentTime = Date()
+    @State private var timeZone: TimeZone?
+    @State private var weatherIcon: String?
+    @State private var isLoadingWeather = false
+    
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    private let weatherService = WeatherService.shared
+    
+    var body: some View {
+        Button(action: onSelect) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    if let weatherIcon = weatherIcon {
+                        Image(systemName: weatherIcon)
+                            .font(.system(size: 11, weight: .medium))
+                            .symbolRenderingMode(.hierarchical)
+                    } else if isLoadingWeather {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 11, height: 11)
+                    } else {
+                        Image(systemName: location.isCurrentLocation ? "location.fill" : "mappin.circle.fill")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    
+                    Text(location.name)
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                    
+                    Spacer(minLength: 0)
+                }
+                
+                Text(formattedTime)
+                    .font(.system(size: 10, weight: .semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(minWidth: 120)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(isSelected ? Color.white.opacity(0.3) : Color.white.opacity(0.15))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(
+                                isSelected ? Color.white.opacity(0.4) : Color.white.opacity(0.25),
+                                lineWidth: isSelected ? 1.5 : 1
+                            )
+                    )
+            )
+            .foregroundColor(.white)
+            .shadow(color: Color.black.opacity(isSelected ? 0.15 : 0.08), radius: 4, x: 0, y: 2)
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button(role: .destructive) {
+                onRemove()
+            } label: {
+                Label("Remove", systemImage: "trash")
+            }
+        }
+        .onReceive(timer) { _ in
+            currentTime = Date()
+        }
+        .onAppear {
+            fetchTimeZone()
+            fetchWeatherIcon()
+        }
+    }
+    
+    private var formattedTime: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        
+        if let timeZone = timeZone {
+            formatter.timeZone = timeZone
+        } else {
+            // Fallback to local time while loading
+            formatter.timeZone = .current
+        }
+        
+        return formatter.string(from: currentTime)
+    }
+    
+    private func fetchTimeZone() {
+        let geocoder = CLGeocoder()
+        let clLocation = CLLocation(latitude: location.latitude, longitude: location.longitude)
+        
+        geocoder.reverseGeocodeLocation(clLocation) { placemarks, error in
+            if let placemark = placemarks?.first {
+                self.timeZone = placemark.timeZone
+            } else {
+                // Fallback to current timezone if we can't determine
+                self.timeZone = .current
+            }
+        }
+    }
+    
+    private func fetchWeatherIcon() {
+        isLoadingWeather = true
+        
+        Task {
+            do {
+                let clLocation = CLLocation(latitude: location.latitude, longitude: location.longitude)
+                let weather = try await weatherService.weather(for: clLocation)
+                
+                DispatchQueue.main.async {
+                    self.weatherIcon = weather.currentWeather.symbolName
+                    self.isLoadingWeather = false
+                }
+            } catch {
+                // If weather fetch fails, fall back to location icon
+                DispatchQueue.main.async {
+                    self.weatherIcon = nil
+                    self.isLoadingWeather = false
+                }
+            }
+        }
+    }
+}
+
+// MARK: - View Model
 class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, MKLocalSearchCompleterDelegate {
     @Published var cityName = ""
     @Published var currentWeather: CurrentWeather?
@@ -4512,7 +4954,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     @Published var searchSuggestions: [MKLocalSearchCompletion] = []
     @Published var isShowingSuggestions: Bool = false
     @Published var savedLocations: [SavedLocation] = []
-    @Published var currentLocationIndex: Int = 0
+    @Published var currentLocationIndex: Int? = nil  // nil = showing current location, not a saved location
     @Published var lastUpdated: Date? = nil
 
     var onWeatherUpdate: ((CurrentWeather) -> Void)?
@@ -4658,6 +5100,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         DispatchQueue.main.async {
             self.isLoading = true
             self.errorMessage = nil
+            self.currentLocationIndex = nil  // Reset to indicate we're viewing current location, not a saved one
         }
 
         guard CLLocationManager.locationServicesEnabled() else {
@@ -4809,16 +5252,23 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     
     func addSavedLocation(name: String, location: CLLocation) {
         let newLocation = SavedLocation(name: name, latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)
-        if !savedLocations.contains(where: { $0.latitude == newLocation.latitude && $0.longitude == newLocation.longitude }) {
+        
+        // Check if location already exists
+        if let existingIndex = savedLocations.firstIndex(where: { $0.latitude == newLocation.latitude && $0.longitude == newLocation.longitude }) {
+            // Location exists, just select it
+            currentLocationIndex = existingIndex
+        } else {
+            // Add new location and select it
             savedLocations.append(newLocation)
+            currentLocationIndex = savedLocations.count - 1
             saveSavedLocations()
         }
     }
     
     func removeSavedLocation(at indexSet: IndexSet) {
         savedLocations.remove(atOffsets: indexSet)
-        if currentLocationIndex >= savedLocations.count {
-            currentLocationIndex = max(0, savedLocations.count - 1)
+        if let currentIndex = currentLocationIndex, currentIndex >= savedLocations.count {
+            currentLocationIndex = savedLocations.isEmpty ? nil : max(0, savedLocations.count - 1)
         }
         saveSavedLocations()
     }
