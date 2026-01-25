@@ -586,6 +586,7 @@ struct ContentView: View {
                     SavedLocationCard(
                         location: location,
                         isSelected: viewModel.currentLocationIndex == index,
+                        cachedWeather: viewModel.getCachedWeather(for: location.id),
                         onSelect: {
                             viewModel.selectLocation(at: index)
                         },
@@ -717,7 +718,7 @@ struct ContentView: View {
     @ViewBuilder
     private var tabPickerView: some View {
         if viewModel.currentWeather != nil {
-            Picker("View", selection: $selectedTab) {
+            Picker("", selection: $selectedTab) {
                 Text("Current").tag(0)
                 Text("Charts").tag(1)
                 Text("Hourly").tag(2)
@@ -738,7 +739,8 @@ struct ContentView: View {
                         weather: weather,
                         locationName: viewModel.locationName,
                         dailyForecast: viewModel.dailyForecast.first,
-                        alerts: viewModel.weatherAlerts
+                        alerts: viewModel.weatherAlerts,
+                        locationTimeZone: viewModel.locationTimeZone
                     )
                 } else if selectedTab == 1 {
                     WeatherChartsView(
@@ -2274,12 +2276,12 @@ struct SnowEffect: View {
         }
         .allowsHitTesting(false)
         .onAppear {
-            snowflakes = (0..<60).map { i in
+            snowflakes = (0..<120).map { i in
                 (
                     id: i,
                     x: CGFloat.random(in: -300...300),
-                    size: CGFloat.random(in: 4...10),
-                    delay: Double(i) * 0.1,
+                    size: CGFloat.random(in: 3...10),
+                    delay: Double(i) * 0.05,
                     speed: Double.random(in: 4...8),
                     drift: CGFloat.random(in: -30...30)
                 )
@@ -2315,13 +2317,7 @@ struct Snowflake: View {
         .rotationEffect(.degrees(rotation))
         .offset(x: xDrift, y: yOffset)
         .onAppear {
-            withAnimation(
-                .linear(duration: speed)
-                .repeatForever(autoreverses: false)
-                .delay(delay)
-            ) {
-                yOffset = 700
-            }
+            startSnowfallAnimation()
             
             withAnimation(
                 .easeInOut(duration: speed / 2)
@@ -2338,6 +2334,27 @@ struct Snowflake: View {
             ) {
                 rotation = 360
             }
+        }
+    }
+    
+    private func startSnowfallAnimation() {
+        // Reset to top
+        yOffset = -400
+        
+        // Animate down after initial delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            animateSnowfall()
+        }
+    }
+    
+    private func animateSnowfall() {
+        withAnimation(.linear(duration: speed)) {
+            yOffset = 700
+        }
+        
+        // After animation completes, reset and start again
+        DispatchQueue.main.asyncAfter(deadline: .now() + speed) {
+            startSnowfallAnimation()
         }
     }
 }
@@ -2428,6 +2445,7 @@ struct CurrentWeatherView: View {
     let locationName: String?
     let dailyForecast: DayWeather?
     let alerts: [WeatherAlert]
+    let locationTimeZone: TimeZone?
     @AppStorage("useCelsius") private var useCelsius: Bool = false
     var body: some View {
         VStack(spacing: 12) {
@@ -2611,7 +2629,7 @@ private var compactMetricsStack: some View {
                                 .font(.caption2)
                                 .foregroundColor(.white.opacity(0.7))
                             
-                            Text(sunrise.formatted(date: .omitted, time: .shortened))
+                            Text(formatTime(sunrise))
                                 .font(.subheadline)
                                 .fontWeight(.medium)
                                 .foregroundColor(.white)
@@ -2635,7 +2653,7 @@ private var compactMetricsStack: some View {
                                 .font(.caption2)
                                 .foregroundColor(.white.opacity(0.7))
                             
-                            Text(sunset.formatted(date: .omitted, time: .shortened))
+                            Text(formatTime(sunset))
                                 .font(.subheadline)
                                 .fontWeight(.medium)
                                 .foregroundColor(.white)
@@ -2732,6 +2750,14 @@ private var compactMetricsStack: some View {
         case .waningCrescent: return "moonphase.waning.crescent"
         @unknown default: return "moon.fill"
         }
+    }
+    
+    // Helper method to format time with location's timezone
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        formatter.timeZone = locationTimeZone ?? .current
+        return formatter.string(from: date)
     }
 }
 
@@ -3285,666 +3311,7 @@ struct AlertBlock: Codable, Identifiable {
     }
 }
 
-// MARK: - Parsed Alert View
 
-//struct ParsedAlertView: View {
-//    let title: String
-//    let sourceURL: URL
-//    let blocks: [AlertBlock]
-//
-//    private struct AlertSection: Identifiable {
-//        let id = UUID()
-//        let header: String
-//        let primary: String
-//        let secondary: String?
-//        let bulletLines: [String]?
-//        let linkTitle: String?
-//        let linkURL: URL?
-//    }
-//
-//    private var labeledSectionsInOrder: [(String, String)] {
-//        blocks.compactMap { block in
-//            guard block.type == "labeledSection", let label = block.label, let value = block.value else { return nil }
-//            return (label.trimmingCharacters(in: .whitespacesAndNewlines), value.trimmingCharacters(in: .whitespacesAndNewlines))
-//        }
-//    }
-//
-//    private var fallbackParagraphs: [String] {
-//        blocks.compactMap { block in
-//            guard block.type == "paragraph", let text = block.text else { return nil }
-//            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-//            return trimmed.isEmpty ? nil : trimmed
-//        }
-//    }
-//
-//    private var sections: [AlertSection] {
-//        var result: [AlertSection] = []
-//
-//        for (label, rawValue) in labeledSectionsInOrder {
-//            let normalized = label.trimmingCharacters(in: CharacterSet(charactersIn: ":* "))
-//            let header = normalized
-//            let value = rawValue
-//
-//            if normalized.caseInsensitiveCompare("Severity") == .orderedSame {
-//                let (primary, secondary) = splitSeverity(value)
-//                result.append(
-//                    AlertSection(
-//                        header: header,
-//                        primary: primary,
-//                        secondary: secondary,
-//                        bulletLines: nil,
-//                        linkTitle: nil,
-//                        linkURL: nil
-//                    )
-//                )
-//                continue
-//            }
-//
-//            if normalized.caseInsensitiveCompare("Description") == .orderedSame {
-//                let bullets = splitBullets(value)
-//                result.append(
-//                    AlertSection(
-//                        header: header,
-//                        primary: "",
-//                        secondary: nil,
-//                        bulletLines: bullets.isEmpty ? nil : bullets,
-//                        linkTitle: nil,
-//                        linkURL: nil
-//                    )
-//                )
-//                continue
-//            }
-//
-//            if normalized.caseInsensitiveCompare("Issued By") == .orderedSame {
-//                result.append(
-//                    AlertSection(
-//                        header: header,
-//                        primary: value,
-//                        secondary: nil,
-//                        bulletLines: nil,
-//                        linkTitle: "View Alert Source",
-//                        linkURL: sourceURL
-//                    )
-//                )
-//                continue
-//            }
-//
-//            result.append(
-//                AlertSection(
-//                    header: header,
-//                    primary: value,
-//                    secondary: nil,
-//                    bulletLines: nil,
-//                    linkTitle: nil,
-//                    linkURL: nil
-//                )
-//            )
-//        }
-//
-//        // If we didn't get a Description section from labeled sections, fall back to any paragraph blocks.
-//        if !fallbackParagraphs.isEmpty, !result.contains(where: { $0.header.lowercased() == "description" }) {
-//            result.append(
-//                AlertSection(
-//                    header: "Description",
-//                    primary: "",
-//                    secondary: nil,
-//                    bulletLines: splitBullets(fallbackParagraphs.joined(separator: "\n")),
-//                    linkTitle: nil,
-//                    linkURL: nil
-//                )
-//            )
-//        }
-//
-//        return result
-//    }
-//
-//    var body: some View {
-//        VStack(spacing: 0) {
-//            HStack {
-//                Text(title)
-//                    .font(.headline)
-//                    .fontWeight(.semibold)
-//                Spacer()
-//            }
-//            .padding(16)
-//
-//            Divider()
-//
-//            ScrollView {
-//                VStack(alignment: .leading, spacing: 0) {
-//                    ForEach(sections.indices, id: \.self) { index in
-//                        let section = sections[index]
-//                        AlertSectionView(section: section)
-//
-//                        if index < sections.count - 1 {
-//                            Divider()
-//                        }
-//                    }
-//                }
-//            }
-//        }
-//        .background(
-//            RoundedRectangle(cornerRadius: 14)
-//                .fill(Color(NSColor.controlBackgroundColor))
-//        )
-//        .overlay(
-//            RoundedRectangle(cornerRadius: 14)
-//                .stroke(Color(NSColor.separatorColor).opacity(0.35), lineWidth: 1)
-//        )
-//        .clipShape(RoundedRectangle(cornerRadius: 14))
-//    }
-//
-//    private struct AlertSectionView: View {
-//        let section: AlertSection
-//
-//        var body: some View {
-//            VStack(alignment: .leading, spacing: 8) {
-//                Text(section.header)
-//                    .font(.headline)
-//
-//                if !section.primary.isEmpty {
-//                    Text(section.primary)
-//                        .font(.body)
-//                }
-//
-//                if let secondary = section.secondary, !secondary.isEmpty {
-//                    Text(secondary)
-//                        .font(.subheadline)
-//                        .foregroundColor(.secondary)
-//                }
-//
-//                if let bullets = section.bulletLines, !bullets.isEmpty {
-//                    VStack(alignment: .leading, spacing: 6) {
-//                        ForEach(bullets, id: \.self) { line in
-//                            Text(line)
-//                                .font(.subheadline)
-//                                .foregroundColor(.secondary)
-//                                .fixedSize(horizontal: false, vertical: true)
-//                        }
-//                    }
-//                    .padding(.top, 2)
-//                }
-//
-//                if let linkTitle = section.linkTitle, let linkURL = section.linkURL {
-//                    Link(linkTitle, destination: linkURL)
-//                        .font(.subheadline)
-//                }
-//            }
-//            .padding(16)
-//            .frame(maxWidth: .infinity, alignment: .leading)
-//        }
-//    }
-//
-//    private func splitSeverity(_ raw: String) -> (String, String?) {
-//        // NWS text tends to come through as: "Moderate Possible threat to life or property"
-//        // Keep the first token as the "rating" and the remainder as secondary context.
-//        let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-//        let parts = cleaned.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-//        if parts.count == 2 {
-//            return (String(parts[0]), String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines))
-//        }
-//        return (cleaned, nil)
-//    }
-//
-//    private func splitBullets(_ raw: String) -> [String] {
-//        let cleaned = raw.replacingOccurrences(of: "\r", with: "")
-//        // Prefer splitting on NWS-style "* " bullets.
-//        let parts = cleaned
-//            .components(separatedBy: "\n")
-//            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-//            .filter { !$0.isEmpty }
-//
-//        // If we already have lines that look like bullets, keep them as-is.
-//        if parts.contains(where: { $0.hasPrefix("*") }) {
-//            return parts
-//        }
-//
-//        // Otherwise, attempt to split inline "*" markers.
-//        let inlineParts = cleaned
-//            .components(separatedBy: "*")
-//            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-//            .filter { !$0.isEmpty }
-//
-//        if inlineParts.count > 1 {
-//            return inlineParts.map { "* " + $0 }
-//        }
-//
-//        return parts
-//    }
-//
-//    @ViewBuilder
-//    private func blockView(for block: AlertBlock) -> some View {
-//        switch block.type {
-//        case "labeledSection":
-//            labeledSectionView(block: block)
-//        case "heading":
-//            headingView(level: block.level ?? 1, text: block.text ?? "")
-//                .padding(.horizontal, 16)
-//                .padding(.top, block.level ?? 1 == 1 ? 12 : 6)
-//        case "paragraph":
-//            paragraphView(block: block)
-//        case "orderedList":
-//            orderedListView(items: block.items ?? [])
-//        case "unorderedList":
-//            unorderedListView(items: block.items ?? [])
-//        case "definitionList":
-//            definitionListView(items: block.items ?? [])
-//        default:
-//            EmptyView()
-//        }
-//    }
-//
-//    @ViewBuilder
-//    private func labeledSectionView(block: AlertBlock) -> some View {
-//        VStack(alignment: .leading, spacing: 6) {
-//            if let label = block.label {
-//                Text(label)
-//                    .font(.system(size: 13, weight: .semibold))
-//                    .foregroundColor(.white.opacity(0.95))
-//                    .textCase(.uppercase)
-//                    .kerning(0.3)
-//            }
-//
-//            if let value = block.value, !value.isEmpty {
-//                Text(formatValue(value))
-//                    .font(.system(size: 14, weight: .regular))
-//                    .foregroundColor(.white.opacity(0.75))
-//                    .lineSpacing(3)
-//                    .fixedSize(horizontal: false, vertical: true)
-//            }
-//        }
-//        .frame(maxWidth: .infinity, alignment: .leading)
-//        .padding(.vertical, 14)
-//        .padding(.horizontal, 20)
-//        .background(Color.clear)
-//        .overlay(
-//            Rectangle()
-//                .fill(Color.white.opacity(0.08))
-//                .frame(height: 0.5),
-//            alignment: .bottom
-//        )
-//    }
-//
-//    private func formatValue(_ value: String) -> String {
-//        var formatted = value.trimmingCharacters(in: .whitespacesAndNewlines)
-//
-//        // Remove trailing periods for cleaner look
-//        while formatted.hasSuffix(".") {
-//            formatted = String(formatted.dropLast())
-//        }
-//
-//        // Fix multiple spaces
-//        formatted = formatted.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-//
-//        return formatted
-//    }
-//
-//    @ViewBuilder
-//    private func paragraphView(block: AlertBlock) -> some View {
-//        VStack(alignment: .leading, spacing: 14) {
-//            if let text = block.text, !text.isEmpty {
-//                Text(formatParagraphText(text))
-//                    .foregroundColor(.white)
-//                    .font(.callout)
-//                    .lineSpacing(6)
-//                    .fixedSize(horizontal: false, vertical: true)
-//                    .frame(maxWidth: .infinity, alignment: .leading)
-//            }
-//            if let links = block.links {
-//                linksView(links: links)
-//            }
-//        }
-//        .padding(.horizontal, 22)
-//        .padding(.vertical, 18)
-//        .background(
-//            RoundedRectangle(cornerRadius: 14)
-//                .fill(Color.white.opacity(0.12))
-//                .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-//        )
-//        .overlay(
-//            RoundedRectangle(cornerRadius: 14)
-//                .stroke(Color.white.opacity(0.15), lineWidth: 1)
-//        )
-//        .padding(.horizontal, 12)
-//    }
-//
-//    private func formatParagraphText(_ text: String) -> String {
-//        var formatted = text.trimmingCharacters(in: .whitespacesAndNewlines)
-//
-//        // Add period at end if missing
-//        if !formatted.isEmpty && ![".", "!", "?", ":", ";"].contains(where: { formatted.hasSuffix(String($0)) }) {
-//            formatted += "."
-//        }
-//
-//        // Fix multiple spaces
-//        formatted = formatted.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-//
-//        // Ensure proper spacing after punctuation
-//        formatted = formatted.replacingOccurrences(of: #"([.!?])([A-Z])"#, with: "$1 $2", options: .regularExpression)
-//
-//        return formatted
-//    }
-//
-//    @ViewBuilder
-//    private func linksView(links: [AlertLink]) -> some View {
-//        VStack(alignment: .leading, spacing: 12) {
-//            ForEach(links, id: \.href) { link in
-//                linkButton(link: link)
-//            }
-//        }
-//        .padding(.top, 6)
-//    }
-//
-//    @ViewBuilder
-//    private func linkButton(link: AlertLink) -> some View {
-//        Button(action: {
-//            if let url = URL(string: link.href) {
-//                NSWorkspace.shared.open(url)
-//            }
-//        }) {
-//            HStack(spacing: 10) {
-//                Image(systemName: "arrow.up.right.square.fill")
-//                    .font(.body)
-//                    .foregroundColor(.cyan)
-//                Text(link.text)
-//                    .font(.callout)
-//                    .fontWeight(.medium)
-//                    .underline()
-//                    .foregroundColor(.cyan)
-//                Spacer()
-//            }
-//            .padding(.horizontal, 16)
-//            .padding(.vertical, 12)
-//            .background(
-//                RoundedRectangle(cornerRadius: 10)
-//                    .fill(Color.cyan.opacity(0.18))
-//            )
-//            .overlay(
-//                RoundedRectangle(cornerRadius: 10)
-//                    .stroke(Color.cyan.opacity(0.5), lineWidth: 1.5)
-//            )
-//        }
-//        .buttonStyle(.plain)
-//    }
-//
-//    @ViewBuilder
-//    private func orderedListView(items: [String]) -> some View {
-//        if !items.isEmpty {
-//            VStack(alignment: .leading, spacing: 16) {
-//                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-//                    orderedListItem(index: index, item: item, isLast: index == items.count - 1)
-//                }
-//            }
-//            .padding(20)
-//            .background(
-//                RoundedRectangle(cornerRadius: 14)
-//                    .fill(Color.orange.opacity(0.12))
-//                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-//            )
-//            .overlay(
-//                RoundedRectangle(cornerRadius: 14)
-//                    .stroke(Color.orange.opacity(0.35), lineWidth: 1.5)
-//            )
-//            .padding(.horizontal, 12)
-//        }
-//    }
-//
-//    @ViewBuilder
-//    private func orderedListItem(index: Int, item: String, isLast: Bool) -> some View {
-//        VStack(spacing: 0) {
-//            HStack(alignment: .top, spacing: 16) {
-//                ZStack {
-//                    Circle()
-//                        .fill(Color.orange.opacity(0.3))
-//                        .frame(width: 36, height: 36)
-//                    Circle()
-//                        .stroke(Color.orange.opacity(0.5), lineWidth: 2)
-//                        .frame(width: 36, height: 36)
-//                    Text("\(index + 1)")
-//                        .foregroundColor(.orange)
-//                        .font(.callout)
-//                        .fontWeight(.bold)
-//                }
-//                .padding(.top, 1)
-//
-//                Text(formatListItemText(item))
-//                    .foregroundColor(.white)
-//                    .font(.callout)
-//                    .lineSpacing(5)
-//                    .fixedSize(horizontal: false, vertical: true)
-//                    .frame(maxWidth: .infinity, alignment: .leading)
-//            }
-//
-//            if !isLast {
-//                Divider()
-//                    .background(Color.orange.opacity(0.2))
-//                    .padding(.leading, 52)
-//                    .padding(.top, 18)
-//            }
-//        }
-//    }
-//
-//    private func formatListItemText(_ text: String) -> String {
-//        var formatted = text.trimmingCharacters(in: .whitespacesAndNewlines)
-//
-//        // Add period at end if missing
-//        if !formatted.isEmpty && ![".", "!", "?", ":", ";"].contains(where: { formatted.hasSuffix(String($0)) }) {
-//            formatted += "."
-//        }
-//
-//        // Fix multiple spaces
-//        formatted = formatted.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-//
-//        return formatted
-//    }
-//
-//    @ViewBuilder
-//    private func unorderedListView(items: [String]) -> some View {
-//        if !items.isEmpty {
-//            VStack(alignment: .leading, spacing: 14) {
-//                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-//                    unorderedListItem(item: item, isLast: index == items.count - 1)
-//                }
-//            }
-//            .padding(20)
-//            .background(
-//                RoundedRectangle(cornerRadius: 14)
-//                    .fill(Color.blue.opacity(0.12))
-//                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-//            )
-//            .overlay(
-//                RoundedRectangle(cornerRadius: 14)
-//                    .stroke(Color.blue.opacity(0.35), lineWidth: 1.5)
-//            )
-//            .padding(.horizontal, 12)
-//        }
-//    }
-//
-//    @ViewBuilder
-//    private func unorderedListItem(item: String, isLast: Bool) -> some View {
-//        VStack(spacing: 0) {
-//            HStack(alignment: .top, spacing: 14) {
-//                Circle()
-//                    .fill(Color.blue)
-//                    .frame(width: 10, height: 10)
-//                    .padding(.top, 8)
-//
-//                Text(formatListItemText(item))
-//                    .foregroundColor(.white)
-//                    .font(.callout)
-//                    .lineSpacing(5)
-//                    .fixedSize(horizontal: false, vertical: true)
-//                    .frame(maxWidth: .infinity, alignment: .leading)
-//            }
-//
-//            if !isLast {
-//                Divider()
-//                    .background(Color.blue.opacity(0.2))
-//                    .padding(.leading, 24)
-//                    .padding(.top, 16)
-//            }
-//        }
-//    }
-//
-//    @ViewBuilder
-//    private func definitionListView(items: [String]) -> some View {
-//        if !items.isEmpty {
-//            VStack(alignment: .leading, spacing: 14) {
-//                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
-//                    definitionListItem(item: item, isLast: index == items.count - 1)
-//                }
-//            }
-//            .padding(20)
-//            .background(
-//                RoundedRectangle(cornerRadius: 14)
-//                    .fill(Color.purple.opacity(0.12))
-//                    .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-//            )
-//            .overlay(
-//                RoundedRectangle(cornerRadius: 14)
-//                    .stroke(Color.purple.opacity(0.35), lineWidth: 1.5)
-//            )
-//            .padding(.horizontal, 12)
-//        }
-//    }
-//
-//    @ViewBuilder
-//    private func definitionListItem(item: String, isLast: Bool) -> some View {
-//        VStack(spacing: 0) {
-//            HStack(alignment: .top, spacing: 12) {
-//                Image(systemName: "info.circle.fill")
-//                    .font(.title3)
-//                    .foregroundColor(.purple)
-//                    .padding(.top, 2)
-//
-//                Text(formatDefinitionText(item))
-//                    .foregroundColor(.white)
-//                    .font(.callout)
-//                    .lineSpacing(5)
-//                    .fixedSize(horizontal: false, vertical: true)
-//                    .frame(maxWidth: .infinity, alignment: .leading)
-//            }
-//
-//            if !isLast {
-//                Divider()
-//                    .background(Color.purple.opacity(0.2))
-//                    .padding(.leading, 38)
-//                    .padding(.top, 16)
-//            }
-//        }
-//    }
-//
-//    private func formatDefinitionText(_ text: String) -> String {
-//        var formatted = text.trimmingCharacters(in: .whitespacesAndNewlines)
-//
-//        // If it contains a colon, format as "Term: Definition."
-//        if let colonRange = formatted.range(of: ":") {
-//            let term = formatted[..<colonRange.lowerBound].trimmingCharacters(in: .whitespaces)
-//            var definition = formatted[colonRange.upperBound...].trimmingCharacters(in: .whitespaces)
-//
-//            // Add period to definition if missing
-//            if !definition.isEmpty && ![".", "!", "?"].contains(where: { definition.hasSuffix(String($0)) }) {
-//                definition += "."
-//            }
-//
-//            formatted = "\(term): \(definition)"
-//        } else {
-//            // No colon, just add period if missing
-//            if !formatted.isEmpty && ![".", "!", "?", ":", ";"].contains(where: { formatted.hasSuffix(String($0)) }) {
-//                formatted += "."
-//            }
-//        }
-//
-//        // Fix multiple spaces
-//        formatted = formatted.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-//
-//        return formatted
-//    }
-//
-//    @ViewBuilder
-//    private func headingView(level: Int, text: String) -> some View {
-//        HStack(spacing: 14) {
-//            Rectangle()
-//                .fill(
-//                    LinearGradient(
-//                        colors: [Color.cyan, Color.blue],
-//                        startPoint: .top,
-//                        endPoint: .bottom
-//                    )
-//                )
-//                .frame(width: 6, height: headingHeight(for: level))
-//                .cornerRadius(3)
-//                .shadow(color: Color.cyan.opacity(0.3), radius: 2, x: 0, y: 0)
-//
-//            headingTextView(level: level, text: text)
-//
-//            Spacer()
-//        }
-//        .padding(.vertical, 12)
-//        .padding(.horizontal, 8)
-//        .background(
-//            RoundedRectangle(cornerRadius: 10)
-//                .fill(Color.white.opacity(0.08))
-//        )
-//    }
-//
-//    @ViewBuilder
-//    private func headingTextView(level: Int, text: String) -> some View {
-//        VStack(alignment: .leading, spacing: 4) {
-//            switch level {
-//            case 1:
-//                Text(formatHeadingText(text))
-//                    .font(.title2)
-//                    .fontWeight(.bold)
-//                    .foregroundColor(.white)
-//                    .lineSpacing(6)
-//                    .shadow(color: .black.opacity(0.2), radius: 1, x: 0, y: 1)
-//            case 2:
-//                Text(formatHeadingText(text))
-//                    .font(.title3)
-//                    .fontWeight(.semibold)
-//                    .foregroundColor(.white)
-//                    .lineSpacing(5)
-//                    .shadow(color: .black.opacity(0.15), radius: 1, x: 0, y: 1)
-//            case 3:
-//                Text(formatHeadingText(text))
-//                    .font(.headline)
-//                    .fontWeight(.semibold)
-//                    .foregroundColor(.white.opacity(0.95))
-//                    .lineSpacing(4)
-//            default:
-//                Text(formatHeadingText(text))
-//                    .font(.subheadline)
-//                    .fontWeight(.medium)
-//                    .foregroundColor(.white.opacity(0.9))
-//                    .lineSpacing(3)
-//            }
-//        }
-//    }
-//
-//    private func formatHeadingText(_ text: String) -> String {
-//        var formatted = text.trimmingCharacters(in: .whitespacesAndNewlines)
-//
-//        // Fix multiple spaces
-//        formatted = formatted.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-//
-//        // Remove trailing periods from headings (headings typically don't have periods)
-//        while formatted.hasSuffix(".") {
-//            formatted = String(formatted.dropLast())
-//        }
-//
-//        return formatted
-//    }
-//
-//    private func headingHeight(for level: Int) -> CGFloat {
-//        switch level {
-//        case 1: return 40
-//        case 2: return 36
-//        case 3: return 32
-//        default: return 28
-//        }
-//    }
-//}
 struct ParsedAlertView: View {
     let blocks: [AlertBlock]
 
@@ -5871,17 +5238,37 @@ struct SavedLocation: Codable, Identifiable, Equatable {
     var clLocation: CLLocation { CLLocation(latitude: latitude, longitude: longitude) }
 }
 
+// MARK: - Cached Weather Data for Locations
+struct CachedLocationWeather: Codable, Equatable {
+    let locationId: UUID
+    let temperature: Double // Store in Celsius for consistency
+    let condition: String
+    let symbolName: String
+    let lastUpdated: Date
+    
+    init(locationId: UUID, weather: CurrentWeather, lastUpdated: Date = Date()) {
+        self.locationId = locationId
+        self.temperature = weather.temperature.converted(to: .celsius).value
+        self.condition = weather.condition.description
+        self.symbolName = weather.symbolName
+        self.lastUpdated = lastUpdated
+    }
+}
+
 // MARK: - Saved Location Card View
 struct SavedLocationCard: View {
     let location: SavedLocation
     let isSelected: Bool
+    let cachedWeather: CachedLocationWeather?
     let onSelect: () -> Void
     let onRemove: () -> Void
     
     @State private var currentTime = Date()
     @State private var timeZone: TimeZone?
     @State private var weatherIcon: String?
+    @State private var temperature: Double?
     @State private var isLoadingWeather = false
+    @AppStorage("useCelsius") private var useCelsius: Bool = false
     
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     private let weatherService = WeatherService.shared
@@ -5890,7 +5277,7 @@ struct SavedLocationCard: View {
         Button(action: onSelect) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    if let weatherIcon = weatherIcon {
+                    if let weatherIcon = displayWeatherIcon {
                         Image(systemName: weatherIcon)
                             .font(.system(size: 11, weight: .medium))
                             .symbolRenderingMode(.hierarchical)
@@ -5908,6 +5295,12 @@ struct SavedLocationCard: View {
                         .lineLimit(1)
                     
                     Spacer(minLength: 0)
+                    
+                    if let temp = displayTemperature {
+                        Text("\(formattedTemperature(temp))°")
+                            .font(.system(size: 11, weight: .semibold))
+                            .monospacedDigit()
+                    }
                 }
                 
                 Text(formattedTime)
@@ -5945,7 +5338,35 @@ struct SavedLocationCard: View {
         }
         .onAppear {
             fetchTimeZone()
-            fetchWeatherIcon()
+            // Only fetch if we don't have cached data
+            if cachedWeather == nil {
+                fetchWeatherIcon()
+            }
+        }
+        .onChange(of: cachedWeather) { oldValue, newValue in
+            // Update local state when cached weather changes
+            if let cached = newValue {
+                weatherIcon = cached.symbolName
+                temperature = cached.temperature
+            }
+        }
+    }
+    
+    // Prefer cached weather data over local state
+    private var displayWeatherIcon: String? {
+        cachedWeather?.symbolName ?? weatherIcon
+    }
+    
+    private var displayTemperature: Double? {
+        cachedWeather?.temperature ?? temperature
+    }
+    
+    private func formattedTemperature(_ temp: Double) -> Int {
+        let tempMeasurement = Measurement(value: temp, unit: UnitTemperature.celsius)
+        if useCelsius {
+            return Int(tempMeasurement.value)
+        } else {
+            return Int(tempMeasurement.converted(to: .fahrenheit).value)
         }
     }
     
@@ -5987,12 +5408,14 @@ struct SavedLocationCard: View {
                 
                 DispatchQueue.main.async {
                     self.weatherIcon = weather.currentWeather.symbolName
+                    self.temperature = weather.currentWeather.temperature.converted(to: .celsius).value
                     self.isLoadingWeather = false
                 }
             } catch {
                 // If weather fetch fails, fall back to location icon
                 DispatchQueue.main.async {
                     self.weatherIcon = nil
+                    self.temperature = nil
                     self.isLoadingWeather = false
                 }
             }
@@ -6009,6 +5432,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     @Published var minuteForecast: Forecast<MinuteWeather>?
     @Published var weatherAlerts: [WeatherAlert] = []
     @Published var locationName: String?
+    @Published var locationTimeZone: TimeZone?
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var refreshIntervalMinutes: Int = 30
@@ -6017,6 +5441,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     @Published var savedLocations: [SavedLocation] = []
     @Published var currentLocationIndex: Int? = nil  // nil = showing current location, not a saved location
     @Published var lastUpdated: Date? = nil
+    
+    // Cache for weather data of saved locations
+    @Published var locationWeatherCache: [UUID: CachedLocationWeather] = [:]
 
     var onWeatherUpdate: ((CurrentWeather) -> Void)?
     private let searchCompleter = MKLocalSearchCompleter()
@@ -6053,6 +5480,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         
         searchCompleter.delegate = self
         searchCompleter.resultTypes = [.address]
+        
+        // Refresh weather for saved locations on startup
+        refreshAllSavedLocations()
     }
     
     deinit {
@@ -6207,10 +5637,40 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
 
     private func refreshNow() {
         if isLoading { return }
-        if let loc = lastLocation {
+        
+        // Refresh all saved locations in the background
+        refreshAllSavedLocations()
+        
+        // If we're viewing a saved location, refresh that location's weather
+        if let currentIndex = currentLocationIndex, currentIndex < savedLocations.count {
+            let location = savedLocations[currentIndex]
+            fetchWeather(for: location.clLocation)
+        } else if let loc = lastLocation {
+            // Otherwise refresh the last location (current location)
             fetchWeather(for: loc)
         } else {
+            // Fallback: fetch current location
             fetchCurrentLocationWeather()
+        }
+    }
+    
+    private func refreshAllSavedLocations() {
+        // Refresh weather for all saved locations in the background
+        for location in savedLocations {
+            Task {
+                do {
+                    let weather = try await weatherService.weather(for: location.clLocation)
+                    let cachedWeather = CachedLocationWeather(locationId: location.id, weather: weather.currentWeather)
+                    
+                    DispatchQueue.main.async {
+                        self.locationWeatherCache[location.id] = cachedWeather
+                        self.saveWeatherCache()
+                    }
+                } catch {
+                    // Silently fail for background refreshes - we don't want to show errors for locations not currently being viewed
+                    print("Failed to refresh weather for \(location.name): \(error.localizedDescription)")
+                }
+            }
         }
     }
     
@@ -6303,12 +5763,30 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
            let decoded = try? JSONDecoder().decode([SavedLocation].self, from: data) {
             savedLocations = decoded
         }
+        loadWeatherCache()
     }
     
     private func saveSavedLocations() {
         if let encoded = try? JSONEncoder().encode(savedLocations) {
             UserDefaults.standard.set(encoded, forKey: "savedLocations")
         }
+    }
+    
+    private func loadWeatherCache() {
+        if let data = UserDefaults.standard.data(forKey: "locationWeatherCache"),
+           let decoded = try? JSONDecoder().decode([UUID: CachedLocationWeather].self, from: data) {
+            locationWeatherCache = decoded
+        }
+    }
+    
+    private func saveWeatherCache() {
+        if let encoded = try? JSONEncoder().encode(locationWeatherCache) {
+            UserDefaults.standard.set(encoded, forKey: "locationWeatherCache")
+        }
+    }
+    
+    func getCachedWeather(for locationId: UUID) -> CachedLocationWeather? {
+        return locationWeatherCache[locationId]
     }
     
     func addSavedLocation(name: String, location: CLLocation) {
@@ -6349,6 +5827,16 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 center: location.coordinate,
                 span: MKCoordinateSpan(latitudeDelta: 8, longitudeDelta: 8)
             )
+            
+            // Fetch timezone for the location
+            geocoder.reverseGeocodeLocation(location) { placemarks, error in
+                if let timeZone = placemarks?.first?.timeZone {
+                    DispatchQueue.main.async {
+                        self.locationTimeZone = timeZone
+                    }
+                }
+            }
+            
             do {
                 let weather = try await weatherService.weather(for: location)
                 let hourly = try await weatherService.weather(for: location, including: .hourly)
@@ -6366,6 +5854,14 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                     self.errorMessage = nil
                     self.lastUpdated = Date()
                     self.onWeatherUpdate?(weather.currentWeather)
+                    
+                    // Cache weather data for this location if it's a saved location
+                    if let currentIndex = self.currentLocationIndex, currentIndex < self.savedLocations.count {
+                        let savedLocation = self.savedLocations[currentIndex]
+                        let cachedWeather = CachedLocationWeather(locationId: savedLocation.id, weather: weather.currentWeather)
+                        self.locationWeatherCache[savedLocation.id] = cachedWeather
+                        self.saveWeatherCache()
+                    }
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -6400,3 +5896,6 @@ extension String.Encoding {
     }
 }
 
+#Preview {
+    ContentView().mainContentView
+}
