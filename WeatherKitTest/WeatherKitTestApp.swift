@@ -1315,10 +1315,11 @@ struct FogEffect: View {
 
     var body: some View {
         ZStack {
-            fogLayer(opacity: 0.22, blur: 40, y: -120, scale: 1.2, speed: 26, delay: 0)
-            fogLayer(opacity: 0.18, blur: 55, y: -20,  scale: 1.45, speed: 32, delay: 3)
-            fogLayer(opacity: 0.14, blur: 70, y: 120,  scale: 1.65, speed: 38, delay: 6)
+            fogLayer(opacity: 0.08, blur: 40, y: -120, scale: 1.2, speed: 26, delay: 0)
+            fogLayer(opacity: 0.06, blur: 55, y: -20,  scale: 1.45, speed: 32, delay: 3)
+            fogLayer(opacity: 0.05, blur: 70, y: 120,  scale: 1.65, speed: 38, delay: 6)
         }
+        .clipped() // Clip to prevent overflow affecting layout
         .allowsHitTesting(false)
         .onAppear {
             guard !reduceMotion else { return }
@@ -1329,23 +1330,23 @@ struct FogEffect: View {
     }
 
     private func fogLayer(opacity: Double, blur: CGFloat, y: CGFloat, scale: CGFloat, speed: Double, delay: Double) -> some View {
-        RoundedRectangle(cornerRadius: 300)
+        Ellipse()
             .fill(
-                LinearGradient(
+                RadialGradient(
                     colors: [
                         Color.white.opacity(opacity),
-                        Color.white.opacity(opacity * 0.55),
+                        Color.white.opacity(opacity * 0.5),
                         Color.clear
                     ],
-                    startPoint: .leading,
-                    endPoint: .trailing
+                    center: .center,
+                    startRadius: 50,
+                    endRadius: 250
                 )
             )
-            .frame(width: 900, height: 420)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .scaleEffect(scale)
-            .offset(x: drift * 220, y: y)
+            .offset(x: drift * 180, y: y)
             .blur(radius: blur)
-            .opacity(0.9)
             .animation(reduceMotion ? nil : .linear(duration: speed).repeatForever(autoreverses: true).delay(delay), value: drift)
     }
 }
