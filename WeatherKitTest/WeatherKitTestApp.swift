@@ -3315,7 +3315,6 @@ struct AlertDetailView: View {
                     totalAlerts: totalAlerts,
                     isLoading: $isLoading,
                     onParsedBlocks: { blocks in
-                        print("📦 AlertDetailView received \(blocks.count) parsed blocks for '\(alertIdentifier)' (index: \(alertIndex))")
                         self.parsedBlocks = blocks
                         if !blocks.isEmpty {
                             self.isLoading = false
@@ -3887,36 +3886,20 @@ struct AlertWebView: NSViewRepresentable {
                     const targetAlertTitle = '\(alertIdentifier.replacingOccurrences(of: "'", with: "\\'"))';
                     const targetAlertIndex = \(alertIndex);
                     const expectedTotalAlerts = \(totalAlerts);
-                    console.log('🔍 Starting alert parsing for:', targetAlertTitle, 'at index:', targetAlertIndex, 'of', expectedTotalAlerts);
                     
                     // First, expand all collapsible sections by clicking buttons
                     const expandButtons = document.querySelectorAll('button[aria-expanded="false"]');
-                    console.log('Found ' + expandButtons.length + ' collapsed buttons');
                     expandButtons.forEach(btn => {
                         try {
                             btn.click();
                         } catch(e) {
-                            console.log('Failed to click button:', e);
+                            // Ignore click errors
                         }
                     });
                     
                     // Wait a moment for content to expand, then parse
                     setTimeout(function() {
                         try {
-                            // DIAGNOSTIC: Log the page structure
-                            console.log('📄 PAGE STRUCTURE DIAGNOSTIC:');
-                            console.log('  Total DL elements on page:', document.querySelectorAll('dl').length);
-                            console.log('  Total .card elements:', document.querySelectorAll('.card').length);
-                            console.log('  Total article elements:', document.querySelectorAll('article').length);
-                            console.log('  Total h1-h4 on page:', document.querySelectorAll('h1, h2, h3, h4').length);
-                            
-                            // Log first few headings to see structure
-                            const allHeadings = document.querySelectorAll('h1, h2, h3, h4');
-                            console.log('  First 5 headings on page:');
-                            Array.from(allHeadings).slice(0, 5).forEach((h, i) => {
-                                console.log('    ' + i + ': <' + h.tagName + '> "' + h.textContent.trim().substring(0, 60) + '"');
-                            });
-                            
                             // Helper function to get text from a DD element, handling nested structure
                             function getDDText(dd) {
                                 const listItems = dd.querySelectorAll('li');
@@ -3939,7 +3922,6 @@ struct AlertWebView: NSViewRepresentable {
                                     const text = heading.textContent.trim();
                                     if (text && text.length > 5) {
                                         cardTitle = text;
-                                        console.log('📌 Found heading title:', cardTitle);
                                         break;
                                     }
                                 }
@@ -3951,7 +3933,6 @@ struct AlertWebView: NSViewRepresentable {
                                         const text = elem.textContent.trim();
                                         if (text && text.length > 10) {
                                             cardTitle = text;
-                                            console.log('📌 Found class-based title:', cardTitle);
                                             break;
                                         }
                                     }
@@ -3964,17 +3945,13 @@ struct AlertWebView: NSViewRepresentable {
                                         const text = elem.textContent.trim();
                                         if (text && text.length > 10) {
                                             cardTitle = text;
-                                            console.log('📌 Found bold text as title:', cardTitle);
                                             break;
                                         }
                                     }
                                 }
                                 
-                                console.log('✅ Card ' + index + ' parsed with title:', cardTitle);
-                                
                                 // Look for definition lists (DL) within this card - they contain the structured info
                                 const definitionLists = card.querySelectorAll('dl');
-                                console.log('   Found ' + definitionLists.length + ' definition lists in this card');
                                 
                                 definitionLists.forEach(dl => {
                                     const dts = dl.querySelectorAll('dt');
@@ -3994,8 +3971,6 @@ struct AlertWebView: NSViewRepresentable {
                                     }
                                 });
                                 
-                                console.log('   Extracted ' + blocks.length + ' blocks from card ' + index);
-                                
                                 return { title: cardTitle, blocks: blocks, index: index };
                             }
                             
@@ -4006,7 +3981,6 @@ struct AlertWebView: NSViewRepresentable {
                             let elements = document.querySelectorAll('.card');
                             if (elements.length >= expectedTotalAlerts) {
                                 allCards = Array.from(elements);
-                                console.log('📦 Found ' + allCards.length + ' .card elements (expected ' + expectedTotalAlerts + ')');
                             }
                             
                             // Strategy 2: Look for article tags (common for alert cards)
@@ -4014,7 +3988,6 @@ struct AlertWebView: NSViewRepresentable {
                                 elements = document.querySelectorAll('article');
                                 if (elements.length >= expectedTotalAlerts) {
                                     allCards = Array.from(elements);
-                                    console.log('📦 Found ' + allCards.length + ' article elements (expected ' + expectedTotalAlerts + ')');
                                 }
                             }
                             
@@ -4023,7 +3996,6 @@ struct AlertWebView: NSViewRepresentable {
                                 elements = document.querySelectorAll('section');
                                 if (elements.length >= expectedTotalAlerts) {
                                     allCards = Array.from(elements);
-                                    console.log('📦 Found ' + allCards.length + ' section elements (expected ' + expectedTotalAlerts + ')');
                                 }
                             }
                             
@@ -4032,7 +4004,6 @@ struct AlertWebView: NSViewRepresentable {
                                 elements = document.querySelectorAll('[class*="alert"], [class*="card"], [class*="content"]');
                                 if (elements.length >= expectedTotalAlerts) {
                                     allCards = Array.from(elements);
-                                    console.log('📦 Found ' + allCards.length + ' elements with alert/card classes (expected ' + expectedTotalAlerts + ')');
                                 }
                             }
                             
@@ -4043,7 +4014,6 @@ struct AlertWebView: NSViewRepresentable {
                                     elements = main.querySelectorAll(':scope > div, :scope > article, :scope > section');
                                     if (elements.length >= expectedTotalAlerts) {
                                         allCards = Array.from(elements);
-                                        console.log('📦 Found ' + allCards.length + ' direct children of main (expected ' + expectedTotalAlerts + ')');
                                     }
                                 }
                             }
@@ -4053,12 +4023,10 @@ struct AlertWebView: NSViewRepresentable {
                                 elements = document.querySelectorAll('.card');
                                 if (elements.length > 1) {
                                     allCards = Array.from(elements);
-                                    console.log('📦 FALLBACK: Found ' + allCards.length + ' .card elements');
                                 } else {
                                     elements = document.querySelectorAll('article');
                                     if (elements.length > 1) {
                                         allCards = Array.from(elements);
-                                        console.log('📦 FALLBACK: Found ' + allCards.length + ' article elements');
                                     }
                                 }
                             }
@@ -4066,28 +4034,16 @@ struct AlertWebView: NSViewRepresentable {
                             // If no cards found, treat entire page as one card
                             if (allCards.length === 0) {
                                 allCards = [document.body];
-                                console.log('⚠️ No cards found, using entire body');
                             }
-                            
-                            console.log('🔄 Parsing ' + allCards.length + ' total cards...');
                             
                             // Parse all cards
                             const parsedCards = allCards.map((card, idx) => parseAlertCard(card, idx)).filter(c => c.blocks.length > 0);
-                            console.log('✅ Parsed ' + parsedCards.length + ' cards with content');
-                            
-                            // Log all parsed card titles for debugging
-                            parsedCards.forEach((card, idx) => {
-                                console.log('  Card ' + idx + ': "' + card.title + '" (' + card.blocks.length + ' blocks)');
-                            });
                             
                             // Find the card matching our target alert
                             let targetCard = null;
                             
                             // Try exact match first
                             targetCard = parsedCards.find(c => c.title === targetAlertTitle);
-                            if (targetCard) {
-                                console.log('✅ EXACT MATCH found for "' + targetAlertTitle + '"');
-                            }
                             
                             // If no exact match, try partial match (both directions)
                             if (!targetCard && targetAlertTitle) {
@@ -4095,36 +4051,25 @@ struct AlertWebView: NSViewRepresentable {
                                     c.title.includes(targetAlertTitle) || 
                                     targetAlertTitle.includes(c.title)
                                 );
-                                if (targetCard) {
-                                    console.log('✅ PARTIAL MATCH found: "' + targetCard.title + '" matches "' + targetAlertTitle + '"');
-                                }
                             }
                             
                             // Since we're now using individual URLs (one alert per page),
                             // if we found any cards, just use the first one (or the one at targetAlertIndex if multiple found)
                             if (!targetCard && parsedCards.length > 0) {
-                                console.log('⚠️ No title match found, selecting card by index');
-                                console.log('   Target index:', targetAlertIndex, 'Available cards:', parsedCards.length);
-                                console.log('   Available titles:', parsedCards.map(c => c.title).join(', '));
-                                
                                 // Since we have individual URLs now, usually there should be only 1 card
                                 // But if there are multiple, try to use the first one with content
                                 if (parsedCards.length === 1) {
                                     targetCard = parsedCards[0];
-                                    console.log('✅ Using single card found: "' + targetCard.title + '"');
                                 } else if (targetAlertIndex >= 0 && targetAlertIndex < parsedCards.length) {
                                     targetCard = parsedCards[targetAlertIndex];
-                                    console.log('✅ Using card at index ' + targetAlertIndex + ': "' + targetCard.title + '"');
                                 } else {
                                     // Use first card as fallback
                                     targetCard = parsedCards[0];
-                                    console.log('⚠️ Using first card as fallback: "' + targetCard.title + '"');
                                 }
                             }
                             
                             // If we found a matching card, return its blocks
                             if (targetCard && targetCard.blocks.length > 0) {
-                                console.log('🎯 Returning ' + targetCard.blocks.length + ' blocks for alert');
                                 window.webkit.messageHandlers.alertsParser.postMessage({ 
                                     ok: true, 
                                     blocks: targetCard.blocks 
@@ -4133,7 +4078,6 @@ struct AlertWebView: NSViewRepresentable {
                             }
                             
                             // Last resort: parse the entire page as a single alert
-                            console.log('⚠️ No structured cards found, parsing entire page');
                             const container = document.querySelector('main') || document.body;
                             const allText = container.textContent;
                             const lines = allText.split('\\n').filter(l => l.trim());
@@ -4168,7 +4112,6 @@ struct AlertWebView: NSViewRepresentable {
                             }
                             
                             if (fallbackBlocks.length > 0) {
-                                console.log('📝 Parsed ' + fallbackBlocks.length + ' blocks using fallback method');
                                 window.webkit.messageHandlers.alertsParser.postMessage({ 
                                     ok: true, 
                                     blocks: fallbackBlocks 
@@ -4185,13 +4128,11 @@ struct AlertWebView: NSViewRepresentable {
                                 });
                             }
                         } catch(e) {
-                            console.log('❌ Parsing error:', e);
                             window.webkit.messageHandlers.alertsParser.postMessage({ ok: false, error: e.message });
                         }
-                    }, 300); // Increased wait time to 300ms for content to expand
+                    }, 300);
                     
                 } catch(e) {
-                    console.log('❌ Outer error:', e);
                     window.webkit.messageHandlers.alertsParser.postMessage({ ok: false, error: e.message });
                 }
             })();
@@ -4296,26 +4237,19 @@ struct AlertWebView: NSViewRepresentable {
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             if message.name == "alertsParser" {
                 guard let dict = message.body as? [String: Any] else {
-                    print("❌ Failed to parse message body")
                     return
                 }
                 
                 if let ok = dict["ok"] as? Bool, ok, let blocksArray = dict["blocks"] as? [[String: Any]] {
-                    print("✅ Received \(blocksArray.count) blocks from JavaScript")
                     do {
                         let jsonData = try JSONSerialization.data(withJSONObject: blocksArray, options: [])
                         let blocks = try JSONDecoder().decode([AlertBlock].self, from: jsonData)
-                        print("✅ Successfully decoded \(blocks.count) alert blocks")
                         DispatchQueue.main.async {
                             self.parent.onParsedBlocks(blocks)
                         }
                     } catch {
-                        print("❌ Failed to decode blocks: \(error.localizedDescription)")
+                        // Silently fail decoding
                     }
-                } else if let error = dict["error"] as? String {
-                    print("❌ JavaScript parsing error: \(error)")
-                } else {
-                    print("❌ Unexpected message format")
                 }
             }
         }
