@@ -2452,8 +2452,8 @@ struct CurrentWeatherView: View {
         VStack(spacing: 12) {
             // Weather Alerts
             if !alerts.isEmpty {
-                ForEach(Array(alerts.enumerated()), id: \.offset) { _, alert in
-                    WeatherAlertBanner(alert: alert)
+                ForEach(Array(alerts.enumerated()), id: \.offset) { index, alert in
+                    WeatherAlertBanner(alert: alert, alertIndex: index, totalAlerts: alerts.count)
                 }
             }
 
@@ -3120,6 +3120,8 @@ struct WeatherDetail: View {
 
 struct WeatherAlertBanner: View {
     let alert: WeatherAlert
+    let alertIndex: Int
+    let totalAlerts: Int
     @State private var isExpanded = false
     
     var body: some View {
@@ -3159,8 +3161,14 @@ struct WeatherAlertBanner: View {
             
             if isExpanded {
                 VStack(spacing: 12) {
-                    AlertDetailView(title: alert.summary, url: alert.detailsURL)
-                        .frame(height: 320)
+                    AlertDetailView(
+                        title: alert.summary,
+                        url: createIndividualAlertURL(from: alert.detailsURL, alertIndex: alertIndex),
+                        alertIdentifier: extractAlertID(from: alert),
+                        alertIndex: alertIndex,
+                        totalAlerts: totalAlerts
+                    )
+                    .frame(height: 320)
 
                     HStack(spacing: 12) {
                         Button {
@@ -3245,11 +3253,51 @@ struct WeatherAlertBanner: View {
             return .blue
         }
     }
+    
+    // Extract alert ID from the WeatherAlert for matching with parsed content
+    private func extractAlertID(from alert: WeatherAlert) -> String {
+        // Use the summary as identifier since it's unique per alert
+        return alert.summary
+    }
+    
+    // Create an individual URL for a specific alert by index
+    private func createIndividualAlertURL(from baseURL: URL, alertIndex: Int) -> URL {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            return baseURL
+        }
+        
+        // Extract the IDs from the query parameters
+        guard let queryItems = components.queryItems,
+              let idsItem = queryItems.first(where: { $0.name == "ids" }),
+              let idsString = idsItem.value else {
+            return baseURL
+        }
+        
+        // Split the IDs and get the one at our index
+        let alertIDs = idsString.split(separator: ",").map(String.init)
+        guard alertIndex < alertIDs.count else {
+            return baseURL
+        }
+        
+        // Create new URL with only the specific alert ID
+        let individualID = alertIDs[alertIndex]
+        components.queryItems = queryItems.map { item in
+            if item.name == "ids" {
+                return URLQueryItem(name: "ids", value: individualID)
+            }
+            return item
+        }
+        
+        return components.url ?? baseURL
+    }
 }
 
 struct AlertDetailView: View {
     let title: String
     let url: URL
+    let alertIdentifier: String
+    let alertIndex: Int
+    let totalAlerts: Int
     @State private var isLoading = true
     @State private var parsedBlocks: [AlertBlock] = []
 
@@ -3260,13 +3308,20 @@ struct AlertDetailView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             } else {
                 // While loading or if parsing fails, show the WebView temporarily
-                AlertWebView(url: url, isLoading: $isLoading, onParsedBlocks: { blocks in
-                    print("📦 AlertDetailView received \(blocks.count) parsed blocks")
-                    self.parsedBlocks = blocks
-                    if !blocks.isEmpty {
-                        self.isLoading = false
+                AlertWebView(
+                    url: url,
+                    alertIdentifier: alertIdentifier,
+                    alertIndex: alertIndex,
+                    totalAlerts: totalAlerts,
+                    isLoading: $isLoading,
+                    onParsedBlocks: { blocks in
+                        print("📦 AlertDetailView received \(blocks.count) parsed blocks for '\(alertIdentifier)' (index: \(alertIndex))")
+                        self.parsedBlocks = blocks
+                        if !blocks.isEmpty {
+                            self.isLoading = false
+                        }
                     }
-                })
+                )
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             }
 
@@ -3762,6 +3817,9 @@ struct AlertSectionRow: View {
 // A minimal WKWebView that loads the alert URL and parses content for native rendering
 struct AlertWebView: NSViewRepresentable {
     let url: URL
+    let alertIdentifier: String
+    let alertIndex: Int
+    let totalAlerts: Int
     @Binding var isLoading: Bool
     var onParsedBlocks: (([AlertBlock]) -> Void)
 
@@ -3820,10 +3878,16 @@ struct AlertWebView: NSViewRepresentable {
             DispatchQueue.main.async { self.parent.isLoading = false }
             
             // Inject JS to parse alert content and post message to native
+            let alertIdentifier = parent.alertIdentifier
+            let alertIndex = parent.alertIndex
+            let totalAlerts = parent.totalAlerts
             let parseScript = """
             (function(){
                 try {
-                    console.log('Starting alert parsing...');
+                    const targetAlertTitle = '\(alertIdentifier.replacingOccurrences(of: "'", with: "\\'"))';
+                    const targetAlertIndex = \(alertIndex);
+                    const expectedTotalAlerts = \(totalAlerts);
+                    console.log('🔍 Starting alert parsing for:', targetAlertTitle, 'at index:', targetAlertIndex, 'of', expectedTotalAlerts);
                     
                     // First, expand all collapsible sections by clicking buttons
                     const expandButtons = document.querySelectorAll('button[aria-expanded="false"]');
@@ -3839,121 +3903,295 @@ struct AlertWebView: NSViewRepresentable {
                     // Wait a moment for content to expand, then parse
                     setTimeout(function() {
                         try {
-                            const blocks = [];
+                            // DIAGNOSTIC: Log the page structure
+                            console.log('📄 PAGE STRUCTURE DIAGNOSTIC:');
+                            console.log('  Total DL elements on page:', document.querySelectorAll('dl').length);
+                            console.log('  Total .card elements:', document.querySelectorAll('.card').length);
+                            console.log('  Total article elements:', document.querySelectorAll('article').length);
+                            console.log('  Total h1-h4 on page:', document.querySelectorAll('h1, h2, h3, h4').length);
                             
-                            // Try to find the main content area with various selectors
-                            let container = document.querySelector('.card .contents');
-                            if (!container) {
-                                container = document.querySelector('[class*="content"]');
-                            }
-                            if (!container) {
-                                container = document.querySelector('main');
-                            }
-                            if (!container) {
-                                container = document.body;
-                            }
-                            
-                            console.log('Using container:', container.className || container.tagName);
+                            // Log first few headings to see structure
+                            const allHeadings = document.querySelectorAll('h1, h2, h3, h4');
+                            console.log('  First 5 headings on page:');
+                            Array.from(allHeadings).slice(0, 5).forEach((h, i) => {
+                                console.log('    ' + i + ': <' + h.tagName + '> "' + h.textContent.trim().substring(0, 60) + '"');
+                            });
                             
                             // Helper function to get text from a DD element, handling nested structure
                             function getDDText(dd) {
-                                // Look for list items
                                 const listItems = dd.querySelectorAll('li');
                                 if (listItems.length > 0) {
                                     return Array.from(listItems).map(li => li.textContent.trim()).join(' * ');
                                 }
-                                // Otherwise get all text
                                 return dd.textContent.trim();
                             }
                             
-                            // Look for definition lists (DL) first - they contain the structured info
-                            const definitionLists = container.querySelectorAll('dl');
-                            definitionLists.forEach(dl => {
-                                const dts = dl.querySelectorAll('dt');
-                                const dds = dl.querySelectorAll('dd');
+                            // Helper function to parse a single alert card
+                            function parseAlertCard(card, index) {
+                                const blocks = [];
                                 
-                                for (let i = 0; i < dts.length; i++) {
-                                    const label = dts[i].textContent.trim().replace(/\\*$/, '');
-                                    const value = dds[i] ? getDDText(dds[i]) : '';
-                                    
-                                    if (label && value) {
-                                        blocks.push({
-                                            type: 'labeledSection',
-                                            label: label,
-                                            value: value
-                                        });
+                                // Get the alert title/heading from this card - try multiple strategies
+                                let cardTitle = '';
+                                
+                                // Strategy 1: Look for h1-h4 headings
+                                const headings = card.querySelectorAll('h1, h2, h3, h4');
+                                for (let heading of headings) {
+                                    const text = heading.textContent.trim();
+                                    if (text && text.length > 5) {
+                                        cardTitle = text;
+                                        console.log('📌 Found heading title:', cardTitle);
+                                        break;
                                     }
                                 }
-                            });
-                            
-                            console.log('Parsed ' + blocks.length + ' blocks from definition lists');
-                            
-                            // If we got some blocks, send them
-                            if (blocks.length > 0) {
-                                window.webkit.messageHandlers.alertsParser.postMessage({ ok: true, blocks: blocks });
-                            } else {
-                                // Fallback: parse the raw text and try to identify sections
-                                const allText = container.textContent;
                                 
-                                // Try to split by known section markers
-                                const sections = [];
+                                // Strategy 2: Look for elements with "title" or "heading" classes
+                                if (!cardTitle) {
+                                    const titleElements = card.querySelectorAll('[class*="title"], [class*="heading"], [class*="summary"]');
+                                    for (let elem of titleElements) {
+                                        const text = elem.textContent.trim();
+                                        if (text && text.length > 10) {
+                                            cardTitle = text;
+                                            console.log('📌 Found class-based title:', cardTitle);
+                                            break;
+                                        }
+                                    }
+                                }
                                 
-                                // Match patterns like "Label: value" or "Label * value"
-                                const lines = allText.split('\\n').filter(l => l.trim());
-                                let currentLabel = null;
-                                let currentValue = [];
+                                // Strategy 3: Use first strong/bold text if still no title
+                                if (!cardTitle) {
+                                    const strongElements = card.querySelectorAll('strong, b, [class*="bold"]');
+                                    for (let elem of strongElements) {
+                                        const text = elem.textContent.trim();
+                                        if (text && text.length > 10) {
+                                            cardTitle = text;
+                                            console.log('📌 Found bold text as title:', cardTitle);
+                                            break;
+                                        }
+                                    }
+                                }
                                 
-                                for (let line of lines) {
-                                    line = line.trim();
+                                console.log('✅ Card ' + index + ' parsed with title:', cardTitle);
+                                
+                                // Look for definition lists (DL) within this card - they contain the structured info
+                                const definitionLists = card.querySelectorAll('dl');
+                                console.log('   Found ' + definitionLists.length + ' definition lists in this card');
+                                
+                                definitionLists.forEach(dl => {
+                                    const dts = dl.querySelectorAll('dt');
+                                    const dds = dl.querySelectorAll('dd');
                                     
-                                    // Check if this is a label line (ends with : or *)
-                                    if (line.match(/^[A-Z][^:*]+[:\\*]\\s*$/)) {
-                                        // Save previous section if exists
-                                        if (currentLabel && currentValue.length > 0) {
+                                    for (let i = 0; i < dts.length; i++) {
+                                        const label = dts[i].textContent.trim().replace(/\\*$/, '');
+                                        const value = dds[i] ? getDDText(dds[i]) : '';
+                                        
+                                        if (label && value) {
                                             blocks.push({
                                                 type: 'labeledSection',
-                                                label: currentLabel,
-                                                value: currentValue.join(' ').trim()
+                                                label: label,
+                                                value: value
                                             });
                                         }
-                                        // Start new section
-                                        currentLabel = line.replace(/[:\\*]\\s*$/, '').trim();
-                                        currentValue = [];
-                                    } else if (currentLabel && line) {
-                                        // Continue current section
-                                        currentValue.push(line);
+                                    }
+                                });
+                                
+                                console.log('   Extracted ' + blocks.length + ' blocks from card ' + index);
+                                
+                                return { title: cardTitle, blocks: blocks, index: index };
+                            }
+                            
+                            // Try to find all alert cards on the page with multiple strategies
+                            let allCards = [];
+                            
+                            // Strategy 1: Look for .card elements (most specific)
+                            let elements = document.querySelectorAll('.card');
+                            if (elements.length >= expectedTotalAlerts) {
+                                allCards = Array.from(elements);
+                                console.log('📦 Found ' + allCards.length + ' .card elements (expected ' + expectedTotalAlerts + ')');
+                            }
+                            
+                            // Strategy 2: Look for article tags (common for alert cards)
+                            if (allCards.length === 0) {
+                                elements = document.querySelectorAll('article');
+                                if (elements.length >= expectedTotalAlerts) {
+                                    allCards = Array.from(elements);
+                                    console.log('📦 Found ' + allCards.length + ' article elements (expected ' + expectedTotalAlerts + ')');
+                                }
+                            }
+                            
+                            // Strategy 3: Look for section tags
+                            if (allCards.length === 0) {
+                                elements = document.querySelectorAll('section');
+                                if (elements.length >= expectedTotalAlerts) {
+                                    allCards = Array.from(elements);
+                                    console.log('📦 Found ' + allCards.length + ' section elements (expected ' + expectedTotalAlerts + ')');
+                                }
+                            }
+                            
+                            // Strategy 4: Look for divs with specific classes
+                            if (allCards.length === 0) {
+                                elements = document.querySelectorAll('[class*="alert"], [class*="card"], [class*="content"]');
+                                if (elements.length >= expectedTotalAlerts) {
+                                    allCards = Array.from(elements);
+                                    console.log('📦 Found ' + allCards.length + ' elements with alert/card classes (expected ' + expectedTotalAlerts + ')');
+                                }
+                            }
+                            
+                            // Strategy 5: If still nothing, look for main > div children
+                            if (allCards.length === 0) {
+                                const main = document.querySelector('main');
+                                if (main) {
+                                    elements = main.querySelectorAll(':scope > div, :scope > article, :scope > section');
+                                    if (elements.length >= expectedTotalAlerts) {
+                                        allCards = Array.from(elements);
+                                        console.log('📦 Found ' + allCards.length + ' direct children of main (expected ' + expectedTotalAlerts + ')');
                                     }
                                 }
-                                
-                                // Save last section
-                                if (currentLabel && currentValue.length > 0) {
-                                    blocks.push({
-                                        type: 'labeledSection',
-                                        label: currentLabel,
-                                        value: currentValue.join(' ').trim()
-                                    });
+                            }
+                            
+                            // Strategy 6: Relaxed - accept any number > 1
+                            if (allCards.length === 0) {
+                                elements = document.querySelectorAll('.card');
+                                if (elements.length > 1) {
+                                    allCards = Array.from(elements);
+                                    console.log('📦 FALLBACK: Found ' + allCards.length + ' .card elements');
+                                } else {
+                                    elements = document.querySelectorAll('article');
+                                    if (elements.length > 1) {
+                                        allCards = Array.from(elements);
+                                        console.log('📦 FALLBACK: Found ' + allCards.length + ' article elements');
+                                    }
                                 }
-                                
-                                console.log('Parsed ' + blocks.length + ' blocks using line parsing');
-                                
-                                if (blocks.length === 0) {
-                                    // Ultimate fallback - just show the text
-                                    blocks.push({
-                                        type: 'paragraph',
-                                        text: allText.trim()
-                                    });
+                            }
+                            
+                            // If no cards found, treat entire page as one card
+                            if (allCards.length === 0) {
+                                allCards = [document.body];
+                                console.log('⚠️ No cards found, using entire body');
+                            }
+                            
+                            console.log('🔄 Parsing ' + allCards.length + ' total cards...');
+                            
+                            // Parse all cards
+                            const parsedCards = allCards.map((card, idx) => parseAlertCard(card, idx)).filter(c => c.blocks.length > 0);
+                            console.log('✅ Parsed ' + parsedCards.length + ' cards with content');
+                            
+                            // Log all parsed card titles for debugging
+                            parsedCards.forEach((card, idx) => {
+                                console.log('  Card ' + idx + ': "' + card.title + '" (' + card.blocks.length + ' blocks)');
+                            });
+                            
+                            // Find the card matching our target alert
+                            let targetCard = null;
+                            
+                            // Try exact match first
+                            targetCard = parsedCards.find(c => c.title === targetAlertTitle);
+                            if (targetCard) {
+                                console.log('✅ EXACT MATCH found for "' + targetAlertTitle + '"');
+                            }
+                            
+                            // If no exact match, try partial match (both directions)
+                            if (!targetCard && targetAlertTitle) {
+                                targetCard = parsedCards.find(c => 
+                                    c.title.includes(targetAlertTitle) || 
+                                    targetAlertTitle.includes(c.title)
+                                );
+                                if (targetCard) {
+                                    console.log('✅ PARTIAL MATCH found: "' + targetCard.title + '" matches "' + targetAlertTitle + '"');
                                 }
+                            }
+                            
+                            // Since we're now using individual URLs (one alert per page),
+                            // if we found any cards, just use the first one (or the one at targetAlertIndex if multiple found)
+                            if (!targetCard && parsedCards.length > 0) {
+                                console.log('⚠️ No title match found, selecting card by index');
+                                console.log('   Target index:', targetAlertIndex, 'Available cards:', parsedCards.length);
+                                console.log('   Available titles:', parsedCards.map(c => c.title).join(', '));
                                 
-                                window.webkit.messageHandlers.alertsParser.postMessage({ ok: true, blocks: blocks });
+                                // Since we have individual URLs now, usually there should be only 1 card
+                                // But if there are multiple, try to use the first one with content
+                                if (parsedCards.length === 1) {
+                                    targetCard = parsedCards[0];
+                                    console.log('✅ Using single card found: "' + targetCard.title + '"');
+                                } else if (targetAlertIndex >= 0 && targetAlertIndex < parsedCards.length) {
+                                    targetCard = parsedCards[targetAlertIndex];
+                                    console.log('✅ Using card at index ' + targetAlertIndex + ': "' + targetCard.title + '"');
+                                } else {
+                                    // Use first card as fallback
+                                    targetCard = parsedCards[0];
+                                    console.log('⚠️ Using first card as fallback: "' + targetCard.title + '"');
+                                }
+                            }
+                            
+                            // If we found a matching card, return its blocks
+                            if (targetCard && targetCard.blocks.length > 0) {
+                                console.log('🎯 Returning ' + targetCard.blocks.length + ' blocks for alert');
+                                window.webkit.messageHandlers.alertsParser.postMessage({ 
+                                    ok: true, 
+                                    blocks: targetCard.blocks 
+                                });
+                                return;
+                            }
+                            
+                            // Last resort: parse the entire page as a single alert
+                            console.log('⚠️ No structured cards found, parsing entire page');
+                            const container = document.querySelector('main') || document.body;
+                            const allText = container.textContent;
+                            const lines = allText.split('\\n').filter(l => l.trim());
+                            let currentLabel = null;
+                            let currentValue = [];
+                            const fallbackBlocks = [];
+                            
+                            for (let line of lines) {
+                                line = line.trim();
+                                
+                                if (line.match(/^[A-Z][^:*]+[:\\*]\\s*$/)) {
+                                    if (currentLabel && currentValue.length > 0) {
+                                        fallbackBlocks.push({
+                                            type: 'labeledSection',
+                                            label: currentLabel,
+                                            value: currentValue.join(' ').trim()
+                                        });
+                                    }
+                                    currentLabel = line.replace(/[:\\*]\\s*$/, '').trim();
+                                    currentValue = [];
+                                } else if (currentLabel && line) {
+                                    currentValue.push(line);
+                                }
+                            }
+                            
+                            if (currentLabel && currentValue.length > 0) {
+                                fallbackBlocks.push({
+                                    type: 'labeledSection',
+                                    label: currentLabel,
+                                    value: currentValue.join(' ').trim()
+                                });
+                            }
+                            
+                            if (fallbackBlocks.length > 0) {
+                                console.log('📝 Parsed ' + fallbackBlocks.length + ' blocks using fallback method');
+                                window.webkit.messageHandlers.alertsParser.postMessage({ 
+                                    ok: true, 
+                                    blocks: fallbackBlocks 
+                                });
+                            } else {
+                                // Ultimate fallback
+                                fallbackBlocks.push({
+                                    type: 'paragraph',
+                                    text: allText.trim()
+                                });
+                                window.webkit.messageHandlers.alertsParser.postMessage({ 
+                                    ok: true, 
+                                    blocks: fallbackBlocks 
+                                });
                             }
                         } catch(e) {
-                            console.log('Parsing error:', e);
+                            console.log('❌ Parsing error:', e);
                             window.webkit.messageHandlers.alertsParser.postMessage({ ok: false, error: e.message });
                         }
-                    }, 200); // Wait 200ms for content to expand
+                    }, 300); // Increased wait time to 300ms for content to expand
                     
                 } catch(e) {
-                    console.log('Outer error:', e);
+                    console.log('❌ Outer error:', e);
                     window.webkit.messageHandlers.alertsParser.postMessage({ ok: false, error: e.message });
                 }
             })();
