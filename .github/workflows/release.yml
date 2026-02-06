@@ -27,9 +27,10 @@ jobs:
           SPARKLE_VERSION="2.8.1"
           curl -L -o sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
           tar -xf sparkle.tar.xz
-          GENERATE_APPCAT_PATH="$(find "$PWD" -type f -name 'generate_appcast' | head -n 1)"
+          GENERATE_APPCAT_PATH="$(find "$PWD" -type f \( -name 'generate_appcast' -o -name 'generate-appcast' \) | head -n 1)"
           SPARKLE_BIN="$(dirname "$GENERATE_APPCAT_PATH")"
           echo "SPARKLE_BIN=$SPARKLE_BIN" >> "$GITHUB_ENV"
+          echo "SPARKLE_APPCAST_TOOL=$GENERATE_APPCAT_PATH" >> "$GITHUB_ENV"
 
       - name: Import signing certificate
         env:
@@ -98,12 +99,12 @@ jobs:
           chmod 600 sparkle_private_key
 
       - name: Generate appcast
+        working-directory: ${{ env.DIST_DIR }}
         run: |
-          "$SPARKLE_BIN/generate_appcast" \
+          "$SPARKLE_APPCAST_TOOL" \
             --ed-key-file sparkle_private_key \
             --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/" \
-            --output "$DIST_DIR/appcast.xml" \
-            "$DIST_DIR"
+            "."
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
