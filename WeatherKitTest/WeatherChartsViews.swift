@@ -96,19 +96,18 @@ struct AirQualityChartCard: View {
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
             } else {
+                let lineSegments = segments.filter { $0.points.count >= 2 }
                 Chart {
                     // Severity-colored line segments.
-                    ForEach(segments) { segment in
-                        if segment.points.count >= 2 {
-                            ForEach(segment.points) { point in
-                                LineMark(
-                                    x: .value("Time", point.date),
-                                    y: .value("AQI", point.usAQI)
-                                )
-                                .foregroundStyle(segment.color.gradient)
-                                .interpolationMethod(.catmullRom)
-                                .lineStyle(StrokeStyle(lineWidth: 3))
-                            }
+                    ForEach(lineSegments) { segment in
+                        ForEach(segment.points) { point in
+                            LineMark(
+                                x: .value("Time", point.date),
+                                y: .value("AQI", point.usAQI)
+                            )
+                            .foregroundStyle(segment.color.gradient)
+                            .interpolationMethod(.catmullRom)
+                            .lineStyle(StrokeStyle(lineWidth: 3))
                         }
                     }
                     

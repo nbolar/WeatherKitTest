@@ -702,14 +702,14 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
             }
         }
 #endif
-    }
-#if !canImport(FoundationModels)
-    private func generateAISummaryIfAvailable(locationKey: String) {
+        return
+#else
         DispatchQueue.main.async {
             self.aiSummaryStatus = "Apple Intelligence not available in this build."
         }
-    }
+        return
 #endif
+    }
     
     private static func summaryPrompt(
         current: CurrentWeather,

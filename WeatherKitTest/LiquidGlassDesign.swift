@@ -83,15 +83,8 @@ extension View {
 
 struct LiquidGlassPanelBackground: ViewModifier {
     func body(content: Content) -> some View {
-        Group {
-            if #available(macOS 26.0, *) {
-                content
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: LiquidGlassTokens.panelCorner, style: .continuous))
-            } else {
-                content
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: LiquidGlassTokens.panelCorner, style: .continuous))
-            }
-        }
+        content
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: LiquidGlassTokens.panelCorner, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: LiquidGlassTokens.panelCorner, style: .continuous)
                 .stroke(Color.white.opacity(0.14), lineWidth: 1)
