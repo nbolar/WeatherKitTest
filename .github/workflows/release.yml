@@ -40,6 +40,8 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security import cert.p12 -k build.keychain -P "$CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          security list-keychains -d user -s build.keychain
+          security find-identity -p codesigning -v build.keychain
 
       - name: Install WeatherKit provisioning profile
         env:
@@ -65,7 +67,7 @@ jobs:
             -destination "platform=macOS" \
             -derivedDataPath "$DERIVED_DATA" \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Developer ID Application" \
+            CODE_SIGN_IDENTITY="Developer ID Application: Nikhil Bolar (KALT4PNG4U)" \
             DEVELOPMENT_TEAM="KALT4PNG4U" \
             PROVISIONING_PROFILE_SPECIFIER="$WK_PROFILE_UUID" \
             PROVISIONING_PROFILE="$WK_PROFILE_UUID" \
