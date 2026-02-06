@@ -102,7 +102,7 @@ jobs:
         working-directory: ${{ env.DIST_DIR }}
         run: |
           "$SPARKLE_APPCAST_TOOL" \
-            --ed-key-file sparkle_private_key \
+            --ed-key-file "$GITHUB_WORKSPACE/sparkle_private_key" \
             --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/" \
             "."
 
