@@ -74,7 +74,7 @@ struct WeatherAlertBanner: View {
     }
     
     private var headerContent: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             ZStack {
                 Circle()
                     .fill(Color.yellow.opacity(0.18))
@@ -84,7 +84,10 @@ struct WeatherAlertBanner: View {
                     .imageScale(.small)
             }
             
-            headerText
+            VStack(alignment: .leading, spacing: 4) {
+                alertBadge
+                headerText
+            }
             
             Spacer()
             
@@ -211,6 +214,18 @@ struct WeatherAlertBanner: View {
     
     private var shadowY: CGFloat {
         isExpanded ? 8 : 4
+    }
+
+    private var alertBadge: some View {
+        Text("WEATHER ALERT")
+            .font(.caption2.weight(.semibold))
+            .foregroundColor(.yellow.opacity(0.95))
+            .padding(.vertical, 2)
+            .padding(.horizontal, 6)
+            .background(
+                Capsule()
+                    .fill(Color.yellow.opacity(0.16))
+            )
     }
 
     private var alertBackgroundGradient: LinearGradient {

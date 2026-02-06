@@ -272,8 +272,15 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         for location in savedLocations {
             Task {
                 do {
-                    let weather = try await weatherService.weather(for: location.clLocation)
-                    let cachedWeather = CachedLocationWeather(locationId: location.id, weather: weather.currentWeather)
+                    async let weather = weatherService.weather(for: location.clLocation)
+                    async let daily = weatherService.weather(for: location.clLocation, including: .daily)
+                    let weatherResult = try await weather
+                    let dailyResult = try await daily
+                    let cachedWeather = CachedLocationWeather(
+                        locationId: location.id,
+                        weather: weatherResult.currentWeather,
+                        daily: dailyResult.first
+                    )
                     
                     DispatchQueue.main.async {
                         self.locationWeatherCache[location.id] = cachedWeather
@@ -426,6 +433,24 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         }
         saveSavedLocations()
     }
+
+    func moveSavedLocation(from source: Int, to destination: Int) {
+        guard source != destination,
+              source >= 0, source < savedLocations.count,
+              destination >= 0, destination <= savedLocations.count else { return }
+        var locations = savedLocations
+        let item = locations.remove(at: source)
+        let adjustedDestination = destination > source ? destination - 1 : destination
+        locations.insert(item, at: adjustedDestination)
+        if let currentIndex = currentLocationIndex {
+            let currentLocation = savedLocations[currentIndex]
+            if let newIndex = locations.firstIndex(of: currentLocation) {
+                currentLocationIndex = newIndex
+            }
+        }
+        savedLocations = locations
+        saveSavedLocations()
+    }
     
     func selectLocation(at index: Int) {
         guard index < savedLocations.count else { return }
@@ -438,8 +463,14 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     // MARK: - Weather Fetching
     
     private func fetchWeather(for location: CLLocation) {
-        Task {
-            self.lastLocation = location
+        Task { [weak self] in
+            guard let self else { return }
+            await self.fetchWeatherTask(for: location)
+        }
+    }
+
+    private func fetchWeatherTask(for location: CLLocation) async {
+        self.lastLocation = location
             let locationKey = "\(location.coordinate.latitude),\(location.coordinate.longitude)"
             fetchSequence += 1
             let requestSequence = fetchSequence
@@ -470,10 +501,13 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 let hourly = try await weatherService.weather(for: location, including: .hourly)
                 let daily = try await weatherService.weather(for: location, including: .daily)
                 let minute = try? await weatherService.weather(for: location, including: .minute)
-                let alerts = try? await weatherService.weather(for: location, including: .alerts)
+                let alerts: [WeatherAlert]? = try? await weatherService.weather(for: location, including: .alerts)
                 let airQualityValue = await airQualityResult
                 
-                DispatchQueue.main.async {
+                let alertArray: [WeatherAlert] = alerts ?? []
+                
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
                     guard self.fetchSequence == requestSequence, self.activeLocationKey == locationKey else {
                         return
                     }
@@ -481,7 +515,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                     self.hourlyForecast = Array(hourly)
                     self.dailyForecast = Array(daily)
                     self.minuteForecast = minute
-                    self.weatherAlerts = alerts.map { Array($0) } ?? []
+                    self.weatherAlerts = alertArray
                     self.airQuality = airQualityValue.current
                     self.airQualityHourly = airQualityValue.hourly
                     self.isLoading = false
@@ -492,15 +526,25 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                     // Cache weather data for this location if it's a saved location
                     if let currentIndex = self.currentLocationIndex, currentIndex < self.savedLocations.count {
                         let savedLocation = self.savedLocations[currentIndex]
-                        let cachedWeather = CachedLocationWeather(locationId: savedLocation.id, weather: weather.currentWeather)
+                        let cachedWeather = CachedLocationWeather(
+                            locationId: savedLocation.id,
+                            weather: weather.currentWeather,
+                            daily: daily.first
+                        )
                         self.locationWeatherCache[savedLocation.id] = cachedWeather
                         self.saveWeatherCache()
                     }
 
                     self.generateAISummaryIfAvailable(locationKey: locationKey)
+                    self.scheduleNotificationsIfNeeded(
+                        locationKey: locationKey,
+                        alerts: alertArray,
+                        minuteForecast: minute
+                    )
                 }
             } catch {
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
                     guard self.fetchSequence == requestSequence, self.activeLocationKey == locationKey else {
                         return
                     }
@@ -508,6 +552,21 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                     self.errorMessage = "Failed to fetch weather: \(error.localizedDescription)"
                 }
             }
+    }
+
+    private func scheduleNotificationsIfNeeded(
+        locationKey: String,
+        alerts: [WeatherAlert],
+        minuteForecast: Forecast<MinuteWeather>?
+    ) {
+        guard activeLocationKey == locationKey else { return }
+        guard currentLocationIndex == nil else { return }
+        Task {
+            await WeatherNotificationManager.shared.handleCurrentLocationNotifications(
+                locationName: locationName,
+                alerts: alerts,
+                minuteForecast: minuteForecast
+            )
         }
     }
 
@@ -530,6 +589,33 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
             }
             return
         }
+        let model = SystemLanguageModel.default
+        switch model.availability {
+        case .available:
+            break
+        case .unavailable(let reason):
+            DispatchQueue.main.async {
+                switch reason {
+                case .deviceNotEligible:
+                    self.aiSummaryStatus = "Apple Intelligence unavailable on this device."
+                case .appleIntelligenceNotEnabled:
+                    self.aiSummaryStatus = "Apple Intelligence is turned off in System Settings."
+                case .modelNotReady:
+                    self.aiSummaryStatus = "Apple Intelligence is still preparing. Try again later."
+                @unknown default:
+                    self.aiSummaryStatus = "Apple Intelligence unavailable right now."
+                }
+            }
+            return
+        }
+        guard model.supportsLocale(Locale.current) else {
+            DispatchQueue.main.async {
+                let preferred = Locale.preferredLanguages.joined(separator: ", ")
+                let current = Locale.current.identifier
+                self.aiSummaryStatus = "Apple Intelligence doesn't support this locale. Current: \(current). Preferred: \(preferred)."
+            }
+            return
+        }
         guard let currentWeather, let daily = dailyForecast.first else {
             DispatchQueue.main.async {
                 self.aiSummaryStatus = "Waiting for weather data…"
@@ -545,7 +631,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         let hourly = hourlyForecast
         
         let key = "\(locationKey)-\(currentWeather.date.timeIntervalSince1970)-\(daily.highTemperature.value)-\(daily.lowTemperature.value)-\(currentWeather.condition.rawValue)-\(hourly.first?.date.timeIntervalSince1970 ?? 0)"
-        if lastSummaryKey == key {
+        if lastSummaryKey == key, aiSummaryShort != nil || aiSummaryLong != nil {
             DispatchQueue.main.async {
                 self.aiSummaryStatus = "AI summary up to date."
             }
@@ -554,7 +640,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         lastSummaryKey = key
         
         DispatchQueue.main.async {
-            self.aiSummaryStatus = "Generating AI summary…"
+            self.aiSummaryStatus = ""
         }
         
         aiSummaryTask?.cancel()
@@ -566,12 +652,15 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 Line 2: a casual 4–5 sentence detailed summary with a bit more detail.
                 Avoid emojis and markdown.
                 Use whole numbers only (no decimals) for all numeric values.
+                Respond in English.
                 """)
                 
+                let useCelsius = UserDefaults.standard.bool(forKey: "useCelsius")
                 let prompt = Self.summaryPrompt(
                     current: currentWeather,
                     daily: daily,
-                    hourly: hourly
+                    hourly: hourly,
+                    useCelsius: useCelsius
                 )
                 
                 let response = try await session.respond(to: prompt)
@@ -579,6 +668,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 let lines = text
                     .split(whereSeparator: \.isNewline)
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .map { Self.stripLinePrefix($0) }
                     .filter { !$0.isEmpty }
                 
                 let shortLine = lines.first
@@ -605,7 +695,8 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                     if self.lastSummaryKey == key, self.activeLocationKey == locationKey {
                         self.aiSummaryShort = nil
                         self.aiSummaryLong = nil
-                        self.aiSummaryStatus = "AI summary failed: \(error.localizedDescription)"
+                        self.lastSummaryKey = nil
+                        self.aiSummaryStatus = "AI summary failed."
                     }
                 }
             }
@@ -623,7 +714,8 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     private static func summaryPrompt(
         current: CurrentWeather,
         daily: DayWeather,
-        hourly: [HourWeather]
+        hourly: [HourWeather],
+        useCelsius: Bool
     ) -> String {
         let nextHours = hourly.prefix(24)
         let maxPrecip = nextHours.map(\.precipitationChance).max() ?? 0
@@ -632,13 +724,37 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         let maxTemp = nextHours.map { $0.temperature }.max(by: { $0.value < $1.value }) ?? current.temperature
         
         return """
-        Today’s data:
-        - Current: \(current.condition.description), \(current.temperature.formatted()).
-        - Daily high/low: \(daily.highTemperature.formatted()) / \(daily.lowTemperature.formatted()).
-        - 24h temp range (hourly): \(minTemp.formatted()) to \(maxTemp.formatted()).
+        Today's data:
+        - Current: \(conditionLabel(current.condition)), \(tempString(current.temperature, useCelsius: useCelsius)).
+        - Daily high/low: \(tempString(daily.highTemperature, useCelsius: useCelsius)) / \(tempString(daily.lowTemperature, useCelsius: useCelsius)).
+        - 24h temp range (hourly): \(tempString(minTemp, useCelsius: useCelsius)) to \(tempString(maxTemp, useCelsius: useCelsius)).
         - Peak precip chance next 24h: \(Int(maxPrecip * 100))%.
-        - Peak wind speed next 24h: \(maxWind.formatted()).
+        - Peak wind speed next 24h: \(speedString(maxWind, useCelsius: useCelsius)).
         """
+    }
+
+    private static func tempString(_ temp: Measurement<UnitTemperature>, useCelsius: Bool) -> String {
+        let unit: UnitTemperature = useCelsius ? .celsius : .fahrenheit
+        let value = temp.converted(to: unit).value
+        let rounded = Int(value.rounded())
+        return "\(rounded)°\(useCelsius ? "C" : "F")"
+    }
+
+    private static func speedString(_ speed: Measurement<UnitSpeed>, useCelsius: Bool) -> String {
+        let unit: UnitSpeed = useCelsius ? .kilometersPerHour : .milesPerHour
+        let value = speed.converted(to: unit).value
+        let rounded = Int(value.rounded())
+        return "\(rounded) \(useCelsius ? "km/h" : "mph")"
+    }
+
+    private static func conditionLabel(_ condition: WeatherCondition) -> String {
+        let raw = condition.rawValue.replacingOccurrences(of: "_", with: " ")
+        let spaced = raw.replacingOccurrences(
+            of: "([a-z])([A-Z])",
+            with: "$1 $2",
+            options: .regularExpression
+        )
+        return spaced.lowercased()
     }
 
     private static func normalizedWholeNumberText(_ text: String) -> String {
@@ -656,6 +772,18 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
             result.replaceSubrange(range, with: rounded)
         }
         return result
+    }
+
+    private static func stripLinePrefix(_ line: String) -> String {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefixes = ["Line 1:", "Line 2:", "Line 1 -", "Line 2 -", "Line1:", "Line2:"]
+        for prefix in prefixes {
+            if trimmed.lowercased().hasPrefix(prefix.lowercased()) {
+                let start = trimmed.index(trimmed.startIndex, offsetBy: prefix.count)
+                return trimmed[start...].trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return trimmed
     }
 
     private func loadWeatherAttribution() async {
@@ -696,6 +824,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
             let nitrogenDioxide: Double?
             let sulphurDioxide: Double?
             let carbonMonoxide: Double?
+            let uvIndex: Double?
+            let uvIndexClearSky: Double?
+            let aerosolOpticalDepth: Double?
             
             private enum CodingKeys: String, CodingKey {
                 case time
@@ -707,6 +838,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 case nitrogenDioxide = "nitrogen_dioxide"
                 case sulphurDioxide = "sulphur_dioxide"
                 case carbonMonoxide = "carbon_monoxide"
+                case uvIndex = "uv_index"
+                case uvIndexClearSky = "uv_index_clear_sky"
+                case aerosolOpticalDepth = "aerosol_optical_depth"
             }
         }
         
@@ -719,6 +853,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
             let nitrogenDioxide: String?
             let sulphurDioxide: String?
             let carbonMonoxide: String?
+            let uvIndex: String?
+            let uvIndexClearSky: String?
+            let aerosolOpticalDepth: String?
             
             private enum CodingKeys: String, CodingKey {
                 case usAQI = "us_aqi"
@@ -729,6 +866,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 case nitrogenDioxide = "nitrogen_dioxide"
                 case sulphurDioxide = "sulphur_dioxide"
                 case carbonMonoxide = "carbon_monoxide"
+                case uvIndex = "uv_index"
+                case uvIndexClearSky = "uv_index_clear_sky"
+                case aerosolOpticalDepth = "aerosol_optical_depth"
             }
         }
         
@@ -742,6 +882,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
             let nitrogenDioxide: [Double?]?
             let sulphurDioxide: [Double?]?
             let carbonMonoxide: [Double?]?
+            let uvIndex: [Double?]?
+            let uvIndexClearSky: [Double?]?
+            let aerosolOpticalDepth: [Double?]?
             
             private enum CodingKeys: String, CodingKey {
                 case time
@@ -753,6 +896,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 case nitrogenDioxide = "nitrogen_dioxide"
                 case sulphurDioxide = "sulphur_dioxide"
                 case carbonMonoxide = "carbon_monoxide"
+                case uvIndex = "uv_index"
+                case uvIndexClearSky = "uv_index_clear_sky"
+                case aerosolOpticalDepth = "aerosol_optical_depth"
             }
         }
     }
@@ -766,7 +912,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         let lat = location.coordinate.latitude
         let lon = location.coordinate.longitude
         let urlString = """
-        https://air-quality-api.open-meteo.com/v1/air-quality?latitude=\(lat)&longitude=\(lon)&current=us_aqi,european_aqi,pm2_5,pm10,ozone,nitrogen_dioxide,sulphur_dioxide,carbon_monoxide&hourly=us_aqi,european_aqi,pm2_5,pm10,ozone,nitrogen_dioxide,sulphur_dioxide,carbon_monoxide&timezone=auto
+        https://air-quality-api.open-meteo.com/v1/air-quality?latitude=\(lat)&longitude=\(lon)&current=us_aqi,european_aqi,pm2_5,pm10,ozone,nitrogen_dioxide,sulphur_dioxide,carbon_monoxide,uv_index,uv_index_clear_sky,aerosol_optical_depth&hourly=us_aqi,european_aqi,pm2_5,pm10,ozone,nitrogen_dioxide,sulphur_dioxide,carbon_monoxide,uv_index,uv_index_clear_sky,aerosol_optical_depth&timezone=auto
         """
         
         guard let url = URL(string: urlString) else {
@@ -786,7 +932,10 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 ozone: unitsSource?.ozone,
                 nitrogenDioxide: unitsSource?.nitrogenDioxide,
                 sulphurDioxide: unitsSource?.sulphurDioxide,
-                carbonMonoxide: unitsSource?.carbonMonoxide
+                carbonMonoxide: unitsSource?.carbonMonoxide,
+                uvIndex: unitsSource?.uvIndex,
+                uvIndexClearSky: unitsSource?.uvIndexClearSky,
+                aerosolOpticalDepth: unitsSource?.aerosolOpticalDepth
             )
             
             var currentSnapshot: AirQualitySnapshot? = {
@@ -813,6 +962,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                     nitrogenDioxide: current.nitrogenDioxide,
                     sulphurDioxide: current.sulphurDioxide,
                     carbonMonoxide: current.carbonMonoxide,
+                    uvIndex: current.uvIndex,
+                    uvIndexClearSky: current.uvIndexClearSky,
+                    aerosolOpticalDepth: current.aerosolOpticalDepth,
                     units: units,
                     scale: scale
                 )
@@ -840,12 +992,18 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                     nitrogenDioxide: currentSnapshot?.nitrogenDioxide ?? firstNonNil(hourly.nitrogenDioxide),
                     sulphurDioxide: currentSnapshot?.sulphurDioxide ?? firstNonNil(hourly.sulphurDioxide),
                     carbonMonoxide: currentSnapshot?.carbonMonoxide ?? firstNonNil(hourly.carbonMonoxide),
+                    uvIndex: currentSnapshot?.uvIndex ?? firstNonNil(hourly.uvIndex),
+                    uvIndexClearSky: currentSnapshot?.uvIndexClearSky ?? firstNonNil(hourly.uvIndexClearSky),
+                    aerosolOpticalDepth: currentSnapshot?.aerosolOpticalDepth ?? firstNonNil(hourly.aerosolOpticalDepth),
                     units: units,
                     scale: currentSnapshot?.scale ?? scale
                 )
                 
                 if currentSnapshot == nil
-                    || (currentSnapshot?.usAQI == nil && currentSnapshot?.europeanAQI == nil) {
+                    || (currentSnapshot?.usAQI == nil && currentSnapshot?.europeanAQI == nil)
+                    || currentSnapshot?.uvIndexClearSky == nil
+                    || currentSnapshot?.aerosolOpticalDepth == nil
+                    || currentSnapshot?.uvIndex == nil {
                     currentSnapshot = merged
                 }
             }
@@ -861,6 +1019,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                     nitrogenDioxide: nil,
                     sulphurDioxide: nil,
                     carbonMonoxide: nil,
+                    uvIndex: nil,
+                    uvIndexClearSky: nil,
+                    aerosolOpticalDepth: nil,
                     units: AirQualityUnits(usAQI: "AQI"),
                     scale: nil
                 )
@@ -914,6 +1075,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                     nitrogenDioxide: nil,
                     sulphurDioxide: nil,
                     carbonMonoxide: nil,
+                    uvIndex: nil,
+                    uvIndexClearSky: nil,
+                    aerosolOpticalDepth: nil,
                     units: AirQualityUnits(usAQI: "AQI"),
                     scale: nil
                 ),

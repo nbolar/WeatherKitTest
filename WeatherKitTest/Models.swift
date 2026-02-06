@@ -26,17 +26,28 @@ struct SavedLocation: Codable, Identifiable, Equatable {
 
 struct CachedLocationWeather: Codable, Equatable {
     let locationId: UUID
-    let temperature: Double // Store as double for encoding
+    let temperature: Double
     let condition: String
     let symbolName: String
     let date: Date
+    let highTemperature: Double?
+    let lowTemperature: Double?
+    let isDaylight: Bool?
     
-    init(locationId: UUID, weather: CurrentWeather) {
+    init(locationId: UUID, weather: CurrentWeather, daily: DayWeather? = nil) {
         self.locationId = locationId
-        self.temperature = weather.temperature.value
+        self.temperature = weather.temperature.converted(to: .celsius).value
         self.condition = weather.condition.description
         self.symbolName = weather.symbolName
         self.date = weather.date
+        self.isDaylight = weather.isDaylight
+        if let daily {
+            self.highTemperature = daily.highTemperature.converted(to: .celsius).value
+            self.lowTemperature = daily.lowTemperature.converted(to: .celsius).value
+        } else {
+            self.highTemperature = nil
+            self.lowTemperature = nil
+        }
     }
 }
 
@@ -51,6 +62,9 @@ struct AirQualityUnits: Codable, Equatable {
     let nitrogenDioxide: String?
     let sulphurDioxide: String?
     let carbonMonoxide: String?
+    let uvIndex: String?
+    let uvIndexClearSky: String?
+    let aerosolOpticalDepth: String?
     
     init(usAQI: String? = nil,
          europeanAQI: String? = nil,
@@ -59,7 +73,10 @@ struct AirQualityUnits: Codable, Equatable {
          ozone: String? = nil,
          nitrogenDioxide: String? = nil,
          sulphurDioxide: String? = nil,
-         carbonMonoxide: String? = nil) {
+         carbonMonoxide: String? = nil,
+         uvIndex: String? = nil,
+         uvIndexClearSky: String? = nil,
+         aerosolOpticalDepth: String? = nil) {
         self.usAQI = usAQI
         self.europeanAQI = europeanAQI
         self.pm25 = pm25
@@ -68,6 +85,9 @@ struct AirQualityUnits: Codable, Equatable {
         self.nitrogenDioxide = nitrogenDioxide
         self.sulphurDioxide = sulphurDioxide
         self.carbonMonoxide = carbonMonoxide
+        self.uvIndex = uvIndex
+        self.uvIndexClearSky = uvIndexClearSky
+        self.aerosolOpticalDepth = aerosolOpticalDepth
     }
 }
 
@@ -86,6 +106,9 @@ struct AirQualitySnapshot: Equatable {
     let nitrogenDioxide: Double?
     let sulphurDioxide: Double?
     let carbonMonoxide: Double?
+    let uvIndex: Double?
+    let uvIndexClearSky: Double?
+    let aerosolOpticalDepth: Double?
     let units: AirQualityUnits
     let scale: AirQualityScale?
 }

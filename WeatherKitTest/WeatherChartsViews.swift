@@ -10,6 +10,15 @@ struct WeatherChartsView: View {
     let airQuality: AirQualitySnapshot?
     let airQualityHourly: [AirQualityHourPoint]
     @AppStorage("useCelsius") private var useCelsius: Bool = false
+
+    private var shouldShowMinutePrecip: Bool {
+        guard let minuteForecast else { return false }
+        let minutes = Array(minuteForecast.forecast.prefix(60))
+        guard !minutes.isEmpty else { return false }
+        let maxIntensity = minutes.map { $0.precipitationIntensity.value }.max() ?? 0
+        let wetMinutes = minutes.filter { $0.precipitationIntensity.value >= 0.1 }
+        return maxIntensity >= 0.1 && wetMinutes.count >= 2
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -33,7 +42,7 @@ struct WeatherChartsView: View {
             PrecipitationChartView(hourlyForecast: hourlyForecast)
             
             // Minute-by-minute precipitation
-            if let minuteForecast = minuteForecast {
+            if shouldShowMinutePrecip, let minuteForecast = minuteForecast {
                 MinutePrecipitationView(minuteForecast: minuteForecast)
             }
             

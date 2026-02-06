@@ -23,6 +23,11 @@ struct WeatherMapView: View {
     @State private var overlayStyle: WeatherOverlayStyle = .precipitation
     @State private var overlayOpacity: Double = 0.9
     @State private var isOverlayAvailable: Bool = true
+    @State private var radarPath: String? = nil
+    @State private var radarHost: String = "https://tilecache.rainviewer.com"
+    @State private var isRadarLoading: Bool = false
+    @State private var radarTask: Task<Void, Never>?
+    @State private var lastRadarFetch: Date? = nil
     @State private var legendRange: ClosedRange<Double>? = nil
     @State private var legendUnit: String? = nil
     @State private var isLegendLoading: Bool = false
@@ -57,6 +62,7 @@ struct WeatherMapView: View {
                     locationName: viewModel.locationName,
                     overlayStyle: overlayStyle,
                     overlayOpacity: overlayOpacity,
+                    radarPath: radarTemplateBase,
                     onOverlayAvailabilityChange: { available in
                         isOverlayAvailable = available
                     }
@@ -211,8 +217,17 @@ struct WeatherMapView: View {
                     .padding(.bottom, 6)
                     .padding(.trailing, 10)
             }
+            .overlay(alignment: .bottomLeading) {
+                if overlayStyle == .radar {
+                    Text("Radar © RainViewer")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.7))
+                        .padding(.leading, 14)
+                        .padding(.bottom, 10)
+                }
+            }
             .overlay(alignment: .topLeading) {
-                if overlayStyle != .none {
+                if overlayStyle.showsLegend {
                     WeatherOverlayLegend(
                         style: overlayStyle,
                         range: legendRange,
@@ -231,7 +246,7 @@ struct WeatherMapView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundColor(.yellow)
-                    Text("Overlay unavailable (missing API key)")
+                    Text(overlayUnavailableText)
                         .font(.caption)
                         .foregroundColor(.white.opacity(0.85))
                 }
@@ -253,12 +268,23 @@ struct WeatherMapView: View {
         }
         .onChange(of: overlayStyle) { _, _ in
             scheduleLegendRefresh()
+            if overlayStyle == .radar {
+                scheduleRadarRefresh()
+            }
         }
         .onChange(of: EquatableCoordinate(lat: region.center.latitude, lon: region.center.longitude)) { _, _ in
             scheduleLegendRefresh()
         }
+        .onChange(of: radarPath) { _, _ in
+            if overlayStyle == .radar {
+                isOverlayAvailable = radarPath != nil
+            }
+        }
         .onAppear {
             scheduleLegendRefresh()
+            if overlayStyle == .radar {
+                scheduleRadarRefresh()
+            }
         }
     }
 
@@ -269,9 +295,17 @@ struct WeatherMapView: View {
             await updateLegend()
         }
     }
+
+    private func scheduleRadarRefresh() {
+        radarTask?.cancel()
+        radarTask = Task {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            await updateRadarPath()
+        }
+    }
     
     private func updateLegend() async {
-        guard overlayStyle != .none else {
+        guard overlayStyle.showsLegend else {
             DispatchQueue.main.async {
                 legendRange = nil
                 legendUnit = nil
@@ -325,6 +359,52 @@ struct WeatherMapView: View {
             legendRange = range
             legendUnit = unit
             isLegendLoading = false
+        }
+    }
+
+    private struct RainViewerResponse: Decodable {
+        let host: String?
+        let radar: Radar?
+
+        struct Radar: Decodable {
+            let past: [Frame]?
+            let nowcast: [Frame]?
+        }
+
+        struct Frame: Decodable {
+            let time: Int
+            let path: String
+        }
+    }
+
+    private func updateRadarPath() async {
+        guard overlayStyle == .radar else { return }
+        if let lastRadarFetch, Date().timeIntervalSince(lastRadarFetch) < 300, radarPath != nil {
+            return
+        }
+        DispatchQueue.main.async {
+            isRadarLoading = true
+        }
+        do {
+            let url = URL(string: "https://api.rainviewer.com/public/weather-maps.json")!
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let decoded = try JSONDecoder().decode(RainViewerResponse.self, from: data)
+            let latest = decoded.radar?.past?.last
+            DispatchQueue.main.async {
+                if let host = decoded.host {
+                    radarHost = host
+                }
+                radarPath = latest?.path
+                lastRadarFetch = Date()
+                isRadarLoading = false
+                isOverlayAvailable = radarPath != nil
+            }
+        } catch {
+            DispatchQueue.main.async {
+                isRadarLoading = false
+                radarPath = nil
+                isOverlayAvailable = false
+            }
         }
     }
     
@@ -421,6 +501,8 @@ struct WeatherMapView: View {
             case .clouds:
                 let value = current?.cloudCover ?? current?.cloudCoverLegacy
                 return LegendValue(value: value, unit: units?.cloudCover ?? "%")
+            case .radar:
+                return nil
             case .none:
                 return nil
             }
@@ -454,6 +536,8 @@ struct WeatherMapView: View {
             items.append(URLQueryItem(name: "precipitation_unit", value: useCelsius ? "mm" : "inch"))
         case .clouds:
             currentVariable = "cloud_cover"
+        case .radar:
+            return nil
         case .none:
             return nil
         }
@@ -475,6 +559,23 @@ struct WeatherMapView: View {
     
     private var overlayLabel: String {
         overlayStyle.title
+    }
+
+    private var radarTemplateBase: String? {
+        guard let radarPath else { return nil }
+        let host = radarHost.hasSuffix("/") ? String(radarHost.dropLast()) : radarHost
+        let path = radarPath.hasPrefix("/") ? radarPath : "/" + radarPath
+        return host + path
+    }
+
+    private var overlayUnavailableText: String {
+        if overlayStyle == .radar {
+            return isRadarLoading ? "Loading radar data…" : "Radar overlay unavailable."
+        }
+        if overlayStyle.requiresOpenWeatherKey {
+            return "Overlay unavailable (missing API key)"
+        }
+        return "Overlay unavailable."
     }
 }
 
@@ -533,6 +634,12 @@ struct WeatherOverlayLegend: View {
                 startPoint: .leading,
                 endPoint: .trailing
             )
+        case .radar:
+            return LinearGradient(
+                colors: [Color.cyan.opacity(0.4), Color.blue, Color.purple],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
         case .none:
             return LinearGradient(colors: [Color.clear, Color.clear], startPoint: .leading, endPoint: .trailing)
         }
@@ -569,6 +676,8 @@ struct WeatherOverlayLegend: View {
             return formatPrecip(value)
         case .clouds:
             return "\(Int(value.rounded()))%"
+        case .radar:
+            return ""
         case .none:
             return ""
         }
@@ -800,6 +909,7 @@ struct WeatherMapRepresentable: NSViewRepresentable {
     let locationName: String?
     let overlayStyle: WeatherOverlayStyle
     let overlayOpacity: Double
+    let radarPath: String?
     let onOverlayAvailabilityChange: (Bool) -> Void
     
     func makeNSView(context: Context) -> MKMapView {
@@ -828,7 +938,7 @@ struct WeatherMapRepresentable: NSViewRepresentable {
             mapView.addOverlay(circle)
         }
         
-        if let overlay = makeTileOverlay(style: overlayStyle) {
+        if let overlay = makeTileOverlay(style: overlayStyle, radarPath: radarPath) {
             mapView.addOverlay(overlay, level: .aboveRoads)
             onOverlayAvailabilityChange(true)
         } else {
@@ -873,7 +983,7 @@ struct WeatherMapRepresentable: NSViewRepresentable {
         }
         
         if context.coordinator.lastOverlayStyle != overlayStyle {
-            let desiredOverlay = makeTileOverlay(style: overlayStyle)
+            let desiredOverlay = makeTileOverlay(style: overlayStyle, radarPath: radarPath)
             if let existing = context.coordinator.tileOverlay {
                 nsView.removeOverlay(existing)
             }
@@ -887,6 +997,23 @@ struct WeatherMapRepresentable: NSViewRepresentable {
                 onOverlayAvailabilityChange(overlayStyle == .none)
             }
             context.coordinator.lastOverlayStyle = overlayStyle
+        }
+
+        if overlayStyle == .radar, context.coordinator.lastRadarPath != radarPath {
+            let desiredOverlay = makeTileOverlay(style: overlayStyle, radarPath: radarPath)
+            if let existing = context.coordinator.tileOverlay {
+                nsView.removeOverlay(existing)
+            }
+            if let desired = desiredOverlay {
+                nsView.addOverlay(desired, level: .aboveRoads)
+                context.coordinator.tileOverlay = desired
+                context.coordinator.overlayOpacity = overlayOpacity
+                onOverlayAvailabilityChange(true)
+            } else {
+                context.coordinator.tileOverlay = nil
+                onOverlayAvailabilityChange(false)
+            }
+            context.coordinator.lastRadarPath = radarPath
         }
         
         if context.coordinator.lastOverlayOpacity != overlayOpacity {
@@ -910,6 +1037,7 @@ struct WeatherMapRepresentable: NSViewRepresentable {
         var lastLocationKey: String?
         var lastOverlayStyle: WeatherOverlayStyle?
         var lastOverlayOpacity: Double?
+        var lastRadarPath: String?
         
         init(_ parent: WeatherMapRepresentable) { self.parent = parent }
         
@@ -1030,8 +1158,18 @@ struct WeatherMapRepresentable: NSViewRepresentable {
         }
     }
     
-    private func makeTileOverlay(style: WeatherOverlayStyle) -> MKTileOverlay? {
+    private func makeTileOverlay(style: WeatherOverlayStyle, radarPath: String?) -> MKTileOverlay? {
         guard style != .none else { return nil }
+        if style == .radar {
+            guard let radarPath else { return nil }
+            let template = "\(radarPath)/256/{z}/{x}/{y}/2/1_1.png"
+            let overlay = MKTileOverlay(urlTemplate: template)
+            overlay.canReplaceMapContent = false
+            overlay.tileSize = CGSize(width: 256, height: 256)
+            overlay.minimumZ = 0
+            overlay.maximumZ = 7
+            return overlay
+        }
         guard let apiKey = Bundle.main.object(forInfoDictionaryKey: "OWMAPIKey") as? String,
               !apiKey.isEmpty else {
             return nil
@@ -1079,6 +1217,7 @@ extension CLLocation: Identifiable {
 enum WeatherOverlayStyle: String, CaseIterable, Identifiable {
     case none
     case precipitation
+    case radar
     case wind
     case temperature
     case clouds
@@ -1089,6 +1228,7 @@ enum WeatherOverlayStyle: String, CaseIterable, Identifiable {
         switch self {
         case .none: return "None"
         case .precipitation: return "Precip"
+        case .radar: return "Radar"
         case .wind: return "Wind"
         case .temperature: return "Temp"
         case .clouds: return "Clouds"
@@ -1099,9 +1239,28 @@ enum WeatherOverlayStyle: String, CaseIterable, Identifiable {
         switch self {
         case .none: return ""
         case .precipitation: return "precipitation_new"
+        case .radar: return ""
         case .wind: return "wind_new"
         case .temperature: return "temp_new"
         case .clouds: return "clouds_new"
+        }
+    }
+
+    var showsLegend: Bool {
+        switch self {
+        case .none, .radar:
+            return false
+        case .precipitation, .wind, .temperature, .clouds:
+            return true
+        }
+    }
+
+    var requiresOpenWeatherKey: Bool {
+        switch self {
+        case .precipitation, .wind, .temperature, .clouds:
+            return true
+        case .none, .radar:
+            return false
         }
     }
 }

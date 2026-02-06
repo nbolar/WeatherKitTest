@@ -1,5 +1,16 @@
 import SwiftUI
 
+private struct DaylightKey: EnvironmentKey {
+    static let defaultValue: Bool? = nil
+}
+
+extension EnvironmentValues {
+    var isDaylight: Bool? {
+        get { self[DaylightKey.self] }
+        set { self[DaylightKey.self] = newValue }
+    }
+}
+
 // MARK: - Liquid Glass (macOS Tahoe 26) styling helpers
 
 enum LiquidGlassTokens {
@@ -13,27 +24,43 @@ enum LiquidGlassTokens {
 
 struct LiquidGlassCard: ViewModifier {
     var cornerRadius: CGFloat = LiquidGlassTokens.cardCorner
+    @Environment(\.isDaylight) private var isDaylight
 
     func body(content: Content) -> some View {
+        let daylight = isDaylight ?? false
+        let strokeOpacity = daylight ? 0.06 : LiquidGlassTokens.strokeOpacity
+        let innerGlowOpacity = daylight ? 0.04 : LiquidGlassTokens.innerGlowOpacity
+        let shadowOpacity = daylight ? 0.08 : 0.18
+        let shadowRadius: CGFloat = daylight ? 8 : 16
+
         Group {
             if #available(macOS 26.0, *) {
+                let materialOpacity = daylight ? 0.35 : 0.55
                 content
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .background(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(.ultraThinMaterial)
+                            .opacity(materialOpacity)
+                    )
             } else {
                 content
                     .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             }
         }
+        .background(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color.white.opacity(daylight ? 0.02 : 0.0))
+        )
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(LiquidGlassTokens.strokeOpacity), lineWidth: 0.75)
+                .stroke(Color.white.opacity(strokeOpacity), lineWidth: 0.75)
         )
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color.white.opacity(LiquidGlassTokens.innerGlowOpacity),
+                            Color.white.opacity(innerGlowOpacity),
                             Color.white.opacity(0.0)
                         ],
                         startPoint: .topLeading,
@@ -44,7 +71,7 @@ struct LiquidGlassCard: ViewModifier {
                 .opacity(0.9)
                 .allowsHitTesting(false)
         )
-        .shadow(color: .black.opacity(0.22), radius: 18, x: 0, y: 10)
+        .shadow(color: .black.opacity(shadowOpacity), radius: shadowRadius, x: 0, y: daylight ? 6 : 10)
     }
 }
 

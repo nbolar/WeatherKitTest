@@ -35,14 +35,14 @@ struct StarsEffect: View {
         .onAppear {
             if stars.isEmpty {
                 // Concentrate stars toward the upper half like the system Weather backgrounds.
-                stars = (0..<80).map { i in
+                stars = (0..<140).map { i in
                     Star(
                         id: i,
                         x: CGFloat.random(in: -260...260),
                         y: CGFloat.random(in: -420...50),
                         size: CGFloat.random(in: 1.0...2.8),
-                        baseOpacity: Double.random(in: 0.24...0.58),
-                        twinkleSpeed: Double.random(in: 0.8...2.4),
+                        baseOpacity: Double.random(in: 0.28...0.65),
+                        twinkleSpeed: Double.random(in: 1.0...3.2),
                         delay: Double.random(in: 0...12)
                     )
                 }
@@ -52,13 +52,13 @@ struct StarsEffect: View {
     
     private func twinkleOpacity(for star: Star, time: TimeInterval) -> Double {
         let t = time * star.twinkleSpeed + star.delay
-        let slow = sin(t * 0.6) * 0.20
-        let medium = sin(t * 1.4) * 0.12
-        let micro = sin(t * 4.0) * 0.06
-        let sparkle = (star.id % 8 == 0) ? max(0, sin(t * 3.2)) * 0.18 : 0.0
-        let sizeBoost = star.size > 2.2 ? 0.10 : 0.0
+        let slow = sin(t * 0.6) * 0.28
+        let medium = sin(t * 1.6) * 0.16
+        let micro = sin(t * 4.4) * 0.08
+        let sparkle = (star.id % 6 == 0) ? max(0, sin(t * 3.6)) * 0.26 : 0.0
+        let sizeBoost = star.size > 2.2 ? 0.14 : 0.0
         let value = star.baseOpacity + slow + medium + micro + sparkle + sizeBoost
-        return min(max(value, 0.06), 1.0)
+        return min(max(value, 0.08), 1.0)
     }
 
     private func driftOffset(time: TimeInterval) -> CGSize {

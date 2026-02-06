@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import MapKit
+import WeatherKit
 
 // MARK: - Content View
 
@@ -12,6 +13,9 @@ struct ContentView: View {
     @FocusState private var searchFocused: Bool
     @State private var hoveredSuggestionIndex: Int? = nil
     @State private var selectedSuggestionIndex: Int? = nil
+    @State private var isLocationsExpanded: Bool = false
+    @State private var isSearchExpanded: Bool = false
+    @State private var isSpinnerAnimating: Bool = false
     
     // Convenience initializer for previews/testing
     init(viewModel: WeatherViewModel? = nil) {
@@ -49,6 +53,7 @@ struct ContentView: View {
                 
                 InAppSettingsView(isPresented: $showSettings, viewModel: viewModel)
                     .transition(.move(edge: .top).combined(with: .opacity))
+                    .environment(\.isDaylight, viewModel.currentWeather?.isDaylight)
                     .zIndex(3)
             }
         }
@@ -100,6 +105,9 @@ struct ContentView: View {
                             searchFocused = false
                             viewModel.dismissSuggestions()
                             viewModel.selectSuggestion(suggestion)
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                isSearchExpanded = false
+                            }
                             return nil // consume
                         }
                     case 53: // Escape
@@ -130,12 +138,10 @@ struct ContentView: View {
         VStack(spacing: 20) {
             settingsButtonRow
             
-            // Saved locations carousel
-            if !viewModel.savedLocations.isEmpty {
-                savedLocationsCarousel
-            }
+            savedLocationsDrawer
+                .animation(nil, value: viewModel.currentLocationIndex)
             
-            searchBarSection
+            // Search bar now expands from the top-left icon.
             currentLocationButton
             tabPickerView
             scrollArea
@@ -144,36 +150,49 @@ struct ContentView: View {
         }
         .padding(25)
         .background(Color.clear)
+        .overlay {
+            if viewModel.isLoading {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .opacity(0.7)
+                        .frame(width: 64, height: 64)
+                    ElegantSpinner()
+                        .frame(width: 26, height: 26)
+                }
+                .transition(.opacity)
+            }
+        }
+        .environment(\.isDaylight, viewModel.currentWeather?.isDaylight)
     }
     
     @ViewBuilder
-    private var savedLocationsCarousel: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                ForEach(Array(viewModel.savedLocations.enumerated()), id: \.element.id) { index, location in
-                    SavedLocationCard(
-                        location: location,
-                        isSelected: viewModel.currentLocationIndex == index,
-                        cachedWeather: viewModel.getCachedWeather(for: location.id),
-                        onSelect: {
-                            viewModel.selectLocation(at: index)
-                        },
-                        onRemove: {
-                            if let idx = viewModel.savedLocations.firstIndex(where: { $0.id == location.id }) {
-                                viewModel.removeSavedLocation(at: IndexSet(integer: idx))
-                            }
-                        }
-                    )
+    private var savedLocationsDrawer: some View {
+        SavedLocationsDrawer(
+            locations: $viewModel.savedLocations,
+            selectedIndex: viewModel.currentLocationIndex,
+            cachedWeather: viewModel.locationWeatherCache,
+            isExpanded: $isLocationsExpanded,
+            onSelect: { index in
+                viewModel.selectLocation(at: index)
+            },
+            onMove: { fromIndex, toIndex in
+                viewModel.moveSavedLocation(from: fromIndex, to: toIndex)
+            },
+            onRemove: { location in
+                if let idx = viewModel.savedLocations.firstIndex(where: { $0.id == location.id }) {
+                    viewModel.removeSavedLocation(at: IndexSet(integer: idx))
                 }
             }
-            .padding(.horizontal, 5)
-        }
-        .frame(height: 62)
+        )
     }
+
     
     @ViewBuilder
     private var settingsButtonRow: some View {
         HStack {
+            searchButtonInline
+            
             Spacer()
             Button {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -185,6 +204,83 @@ struct ContentView: View {
             }
             .buttonStyle(.borderless)
             .help("Settings")
+        }
+    }
+
+    private var searchButtonInline: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.white.opacity(0.14))
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                    )
+                    .frame(maxWidth: isSearchExpanded ? .infinity : 28)
+                    .frame(height: 28)
+
+                if isSearchExpanded {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.white.opacity(0.7))
+                        TextField("Search Locations", text: $viewModel.cityName)
+                            .textFieldStyle(.plain)
+                            .focused($searchFocused)
+                            .foregroundColor(.white)
+                            .onSubmit {
+                                searchFocused = false
+                                viewModel.searchCity()
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                    isSearchExpanded = false
+                                }
+                            }
+                            .onChange(of: viewModel.cityName) { newValue in
+                                viewModel.updateSearchCompletions(for: newValue)
+                            }
+                        if isSearchExpanded,
+                           searchFocused,
+                           !viewModel.cityName.isEmpty,
+                           viewModel.isShowingSuggestions,
+                           viewModel.searchSuggestions.isEmpty {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .frame(width: 14, height: 14)
+                                .tint(.white.opacity(0.7))
+                        }
+                        Button {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                isSearchExpanded = false
+                                searchFocused = false
+                                viewModel.dismissSuggestions()
+                            }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.white.opacity(0.75))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 10)
+                } else {
+                    HStack(spacing: 0) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.white.opacity(0.9))
+                    }
+                    .frame(width: 28, height: 28)
+                    .contentShape(Capsule())
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                            isSearchExpanded = true
+                            searchFocused = true
+                        }
+                    }
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.85), value: isSearchExpanded)
+
+            if isSearchExpanded, viewModel.isShowingSuggestions {
+                suggestionsList
+            }
         }
     }
     
@@ -201,6 +297,9 @@ struct ContentView: View {
                     .onSubmit {
                         searchFocused = false
                         viewModel.searchCity()
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                            isSearchExpanded = false
+                        }
                     }
                     .onChange(of: viewModel.cityName) { newValue in
                         viewModel.updateSearchCompletions(for: newValue)
@@ -311,6 +410,8 @@ struct ContentView: View {
                         locationTimeZone: viewModel.locationTimeZone,
                         airQuality: viewModel.airQuality,
                         hourlyForecast: viewModel.hourlyForecast,
+                        minuteForecast: viewModel.minuteForecast,
+                        aiSummaryStatus: viewModel.aiSummaryStatus,
                         aiSummaryShort: viewModel.aiSummaryShort,
                         aiSummaryLong: viewModel.aiSummaryLong
                     )
@@ -357,6 +458,8 @@ struct ContentView: View {
             }
         }
         .scrollDisabledWhenChartsVisible(selectedTab == 1)
+        .scrollContentBackground(.hidden)
+        .background(Color.clear)
     }
     
     @ViewBuilder

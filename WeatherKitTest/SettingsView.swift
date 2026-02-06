@@ -39,118 +39,31 @@ struct InAppSettingsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            // Panel content
-            VStack(alignment: .leading, spacing: 14) {
-                header
+        ZStack {
+            GeometryReader { proxy in
+                let maxPanelHeight = min(proxy.size.height * 0.82, 640)
 
-                VStack(alignment: .leading, spacing: 12) {
-                    LiquidGlassSection("Temperature", subtitle: "Choose your preferred unit.") {
-                        Picker("", selection: $useCelsius) {
-                            Text("Fahrenheit (°F)").tag(false)
-                            Text("Celsius (°C)").tag(true)
-                        }
-                        .padding(.horizontal, -8)
-                        .pickerStyle(.segmented)
-                        .onChange(of: useCelsius) { _ in
-                            viewModel.refreshCurrentWeather()
-                        }
-                        .frame(maxWidth: CGFloat.infinity, alignment: Alignment.leading)
-                        
-                    }
-                    
-
-                    LiquidGlassSection("Auto‑Refresh", subtitle: "Refresh weather data automatically.") {
-                        Picker("Refresh every", selection: $refreshIntervalMinutes) {
-                            ForEach(options, id: \.self) { minutes in
-                                if minutes < 60 {
-                                    Text("\(minutes) minutes").tag(minutes)
-                                } else {
-                                    let hours = minutes / 60
-                                    Text("\(hours) \(hours == 1 ? "hour" : "hours")").tag(minutes)
-                                }
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: CGFloat.infinity, alignment: Alignment.leading)
-                    }
-
-                    LiquidGlassSection("Manual Refresh", subtitle: "Fetch the latest weather data immediately.") {
-                        Button {
-                            viewModel.manualRefresh()
-                            dismiss()
-                        } label: {
-                            Label("Refresh Now", systemImage: "arrow.clockwise")
-                                .labelStyle(.titleAndIcon)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.white.opacity(0.20))
-                        .frame(maxWidth: CGFloat.infinity, alignment: Alignment.leading)
-                    }
-                    
-                    
-                    HStack() {
-                        if #available(macOS 13.0, *) {
-                            LiquidGlassSection("Launch at Login", subtitle: "Automatically start the app when you log in.") {
-                                Toggle(isOn: Binding(
-                                    get: { launchManager.isEnabled },
-                                    set: { _ in launchManager.toggle() }
-                                )) {
-                                    Text("Open at login")
-                                }
-                                .toggleStyle(.switch)
-                                .frame(maxWidth: CGFloat.infinity, alignment: Alignment.leading)
-                            }
-                            .frame(maxWidth: CGFloat.infinity, alignment: Alignment.leading)
-                        }
-                        Spacer()
-                        LiquidGlassSection("Quit App", subtitle: "Close WeatherKitTest.") {
-                            Button {
-                                quitApp()
-                            } label: {
-                                Label("Quit", systemImage: "xmark.circle")
-                                    .labelStyle(.titleOnly)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.white.opacity(0.20))
-                            .frame(maxWidth: CGFloat.infinity, maxHeight: 115, alignment: Alignment.center)
-                        }
-                        .frame(maxWidth: CGFloat.infinity, maxHeight: 115, alignment: Alignment.leading)
+                ViewThatFits(in: .vertical) {
+                    settingsPanelContent
+                    ScrollView(showsIndicators: false) {
+                        settingsPanelContent
                     }
                 }
-                .padding(.top, 6)
-                .padding(.horizontal, 14)
-                
-                LiquidGlassSection("Attribution", subtitle: "Data sources for weather and air quality.") {
-                    SettingsAttributionView(weatherAttribution: viewModel.weatherAttribution)
-                        .frame(maxWidth: CGFloat.infinity, alignment: Alignment.leading)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+                .padding(.horizontal, 16)
+                .frame(width: LiquidGlassTokens.panelWidth, alignment: .topLeading)
+                .frame(maxHeight: maxPanelHeight)
+                .liquidGlassPanel()
+                .overlay(panelChromeOverlay)
+                .overlay(alignment: .topTrailing) {
+                    closeButton
+                        .padding(10)
                 }
-                .padding(.horizontal, 14)
-                
-                #if DEBUG
-                LiquidGlassSection("AI Summary", subtitle: "Apple Intelligence status (debug only).") {
-                    Text(viewModel.aiSummaryStatus ?? "No status")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.75))
-                        .lineLimit(3)
-                }
-                .padding(.horizontal, 14)
-                #endif
-                
-                
-
+                .contentShape(RoundedRectangle(cornerRadius: LiquidGlassTokens.panelCorner, style: .continuous))
+                .onTapGesture {}
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-            .frame(width: LiquidGlassTokens.panelWidth, alignment: .topLeading)
-            .liquidGlassPanel()
-            .overlay(panelChromeOverlay)
-            .contentShape(RoundedRectangle(cornerRadius: LiquidGlassTokens.panelCorner, style: .continuous))
-            .onTapGesture {}
-            
-            // Close button floats slightly above, like Tahoe sheets/panels.
-            closeButton
-                .padding(10)
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.top, 12)
@@ -177,15 +90,102 @@ struct InAppSettingsView: View {
             }
             .accessibilityHidden(true)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Settings")
-                    .font(.title3.weight(.semibold))
-            }
+            Text("Settings")
+                .font(.title3.weight(.semibold))
 
             Spacer()
         }
-        .padding(.horizontal, 14)
-        .padding(.bottom, 2)
+        .padding(.bottom, 4)
+    }
+
+    private var settingsPanelContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header
+
+            VStack(alignment: .leading, spacing: 18) {
+                SettingsSectionSimple(title: "General") {
+                    SettingsRow(title: "Temperature", subtitle: "Units for forecasts and charts.") {
+                        Picker("", selection: $useCelsius) {
+                            Text("Fahrenheit (°F)").tag(false)
+                            Text("Celsius (°C)").tag(true)
+                        }
+                        .padding(.horizontal, -6)
+                        .pickerStyle(.segmented)
+                        .onChange(of: useCelsius) { _ in
+                            viewModel.refreshCurrentWeather()
+                        }
+                    }
+
+                        if #available(macOS 13.0, *) {
+                            SettingsRowDivider()
+                            SettingsRow(title: "Launch at Login", subtitle: "Start WeatherKitTest when you log in.") {
+                                Toggle(isOn: Binding(
+                                    get: { launchManager.isEnabled },
+                                    set: { _ in launchManager.toggle() }
+                                )) {
+                                    Text("Open at login")
+                                        .font(.subheadline.weight(.light))
+                                        .foregroundColor(.white.opacity(0.9))
+                                }
+                                .toggleStyle(.switch)
+                            }
+                        }
+                }
+
+                SettingsSectionSimple(title: "Updates") {
+                    SettingsRow(title: "Auto‑Refresh", subtitle: "Update weather data automatically.") {
+                        HStack(spacing: 6) {
+                            Text("Every")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.65))
+                            Picker("", selection: $refreshIntervalMinutes) {
+                                ForEach(options, id: \.self) { minutes in
+                                    if minutes < 60 {
+                                        Text("\(minutes) minutes").tag(minutes)
+                                    } else {
+                                        let hours = minutes / 60
+                                        Text("\(hours) \(hours == 1 ? "hour" : "hours")").tag(minutes)
+                                    }
+                                }
+                            }
+                            .pickerStyle(.menu)
+                        }
+                    }
+
+                    SettingsRowDivider()
+                    SettingsRow(title: "Manual Refresh", subtitle: "Fetch the latest data now.") {
+                        Button {
+                            viewModel.manualRefresh()
+                            dismiss()
+                        } label: {
+                            Label("Refresh Now", systemImage: "arrow.clockwise")
+                                .labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.white.opacity(0.22))
+                    }
+                }
+
+                SettingsSectionSimple(title: "About") {
+                    SettingsRow(title: "Attribution", subtitle: "Data sources for weather and air quality.") {
+                        SettingsAttributionView(weatherAttribution: viewModel.weatherAttribution)
+                    }
+
+                    SettingsRowDivider()
+                    SettingsRow(title: "Quit App", subtitle: "Close WeatherKitTest.") {
+                        Button {
+                            quitApp()
+                        } label: {
+                            Label("Quit", systemImage: "xmark")
+                                .labelStyle(.titleOnly)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.white.opacity(0.22))
+                    }
+                }
+            }
+            .padding(.bottom, 6)
+        }
     }
 
     private var closeButton: some View {
@@ -236,19 +236,75 @@ struct InAppSettingsView: View {
     }
 }
 
+private struct SettingsSectionSimple<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title.uppercased())
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.white.opacity(0.7))
+
+            VStack(alignment: .leading, spacing: 0) {
+                content
+            }
+            .padding(.horizontal, 6)
+        }
+    }
+}
+
+private struct SettingsRow<Content: View>: View {
+    let title: String
+    let subtitle: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.65))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            content
+                .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10)
+    }
+}
+
+private struct SettingsRowDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.10))
+            .frame(height: 1)
+            .padding(.vertical, 4)
+    }
+}
+
 struct SettingsAttributionView: View {
     let weatherAttribution: WeatherAttribution?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isDaylight) private var isDaylight
     
     var body: some View {
+        let mark = preferredMarkSelection()
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                if let markURL = preferredMarkURL() {
+                if let markURL = mark.url {
                     AsyncImage(url: markURL) { image in
                         image
+                            .renderingMode(.template)
                             .resizable()
                             .scaledToFit()
                             .opacity(0.95)
+                            .foregroundStyle(mark.shouldInvert ? Color.white : Color.primary)
                     } placeholder: {
                         Text(weatherAttribution?.serviceName ?? "Apple Weather")
                             .font(.caption2)
@@ -280,10 +336,27 @@ struct SettingsAttributionView: View {
         .padding(.top, 2)
     }
     
-    private func preferredMarkURL() -> URL? {
-        if colorScheme == .dark {
-            return weatherAttribution?.combinedMarkLightURL
+    private func preferredMarkSelection() -> (url: URL?, shouldInvert: Bool) {
+        let lightURL = weatherAttribution?.combinedMarkLightURL
+        let darkURL = weatherAttribution?.combinedMarkDarkURL
+        let prefersLight = isDaylight.map { !$0 } ?? (colorScheme == .dark)
+
+        if prefersLight {
+            if let lightURL {
+                return (lightURL, false)
+            }
+            if let darkURL {
+                return (darkURL, true)
+            }
+            return (nil, false)
         }
-        return weatherAttribution?.combinedMarkDarkURL ?? weatherAttribution?.combinedMarkLightURL
+
+        if let darkURL {
+            return (darkURL, false)
+        }
+        if let lightURL {
+            return (lightURL, true)
+        }
+        return (nil, false)
     }
 }

@@ -38,6 +38,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         weatherViewModel?.onWeatherUpdate = { [weak self] weather in
             self?.updateMenuBar(with: weather)
         }
+
+        Task {
+            await WeatherNotificationManager.shared.requestAuthorization()
+        }
         
         // Create popover with shared view model
         popover = NSPopover()
