@@ -574,7 +574,7 @@ private struct MiniWeatherBackdrop: View {
                 drift = 0.08
             }
         }
-        .onChange(of: isActive) { active in
+        .onChange(of: isActive) { _, active in
             if !active {
                 drift = 0
             } else if isDaylight && !reduceMotion {

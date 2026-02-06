@@ -1210,10 +1210,6 @@ class WeatherAnnotation: NSObject, MKAnnotation {
     }
 }
 
-extension CLLocation: Identifiable {
-    public var id: String { "\(coordinate.latitude),\(coordinate.longitude)" }
-}
-
 enum WeatherOverlayStyle: String, CaseIterable, Identifiable {
     case none
     case precipitation

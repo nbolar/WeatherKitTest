@@ -66,12 +66,19 @@ struct AirQualityChartCard: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            let scale = hourly.first?.scale ?? airQuality.scale ?? .us
-            let label = scale == .eu ? "EU AQI" : "US AQI"
-            let accentValue = selectedPoint?.usAQI ?? airQuality.usAQI ?? airQuality.europeanAQI ?? hourly.last?.usAQI ?? 0
-            let accentColor = aqiColor(accentValue, scale: scale)
-            let segments = aqiSegments(for: hourly, scale: scale)
+        let scale = hourly.first?.scale ?? airQuality.scale ?? .us
+        let label = scale == .eu ? "EU AQI" : "US AQI"
+        
+        // Break down the complex optional chaining
+        let pointAQI = selectedPoint?.usAQI
+        let currentUSAQI = airQuality.usAQI
+        let currentEUAQI = airQuality.europeanAQI
+        let lastHourlyAQI = hourly.last?.usAQI
+        _ = pointAQI ?? currentUSAQI ?? currentEUAQI ?? lastHourlyAQI ?? 0
+        
+        let segments = aqiSegments(for: hourly, scale: scale)
+        
+        return VStack(alignment: .leading, spacing: 10) {
             
             HStack {
                 Text("Air Quality (\(label))")

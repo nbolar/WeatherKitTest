@@ -112,7 +112,7 @@ struct InAppSettingsView: View {
                         }
                         .padding(.horizontal, -6)
                         .pickerStyle(.segmented)
-                        .onChange(of: useCelsius) { _ in
+                        .onChange(of: useCelsius) {
                             viewModel.refreshCurrentWeather()
                         }
                     }
@@ -266,7 +266,7 @@ private struct SettingsSectionSimple<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title.uppercased())
-                .font(.caption.weight(.semibold))
+                .font(.callout.weight(.semibold))
                 .foregroundColor(.white.opacity(0.7))
 
             VStack(alignment: .leading, spacing: 0) {

@@ -57,19 +57,19 @@ struct ContentView: View {
                     .zIndex(3)
             }
         }
-        .onChange(of: searchFocused) { focused in
-            if !focused {
+        .onChange(of: searchFocused) { oldValue, newValue in
+            if !newValue {
                 viewModel.dismissSuggestions()
             }
         }
-        .onChange(of: viewModel.isShowingSuggestions) { showing in
-            if showing && !viewModel.searchSuggestions.isEmpty {
+        .onChange(of: viewModel.isShowingSuggestions) { oldValue, newValue in
+            if newValue && !viewModel.searchSuggestions.isEmpty {
                 selectedSuggestionIndex = 0
             } else {
                 selectedSuggestionIndex = nil
             }
         }
-        .onChange(of: viewModel.searchSuggestions) { newList in
+        .onChange(of: viewModel.searchSuggestions) { oldList, newList in
             if newList.isEmpty {
                 selectedSuggestionIndex = nil
             } else if let idx = selectedSuggestionIndex, idx >= newList.count {
@@ -234,7 +234,7 @@ struct ContentView: View {
                                     isSearchExpanded = false
                                 }
                             }
-                            .onChange(of: viewModel.cityName) { newValue in
+                            .onChange(of: viewModel.cityName) { oldValue, newValue in
                                 viewModel.updateSearchCompletions(for: newValue)
                             }
                         if isSearchExpanded,
@@ -301,7 +301,7 @@ struct ContentView: View {
                             isSearchExpanded = false
                         }
                     }
-                    .onChange(of: viewModel.cityName) { newValue in
+                    .onChange(of: viewModel.cityName) { oldValue, newValue in
                         viewModel.updateSearchCompletions(for: newValue)
                     }
                 if viewModel.isLoading {

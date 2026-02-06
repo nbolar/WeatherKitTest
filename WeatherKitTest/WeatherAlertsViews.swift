@@ -1696,14 +1696,7 @@ struct AlertDetailView: View {
 }
 
 #Preview("AlertDetailView Preview") {
-    let sampleBlocks: [AlertBlock] = [
-        AlertBlock(type: "labeledSection", level: nil, text: nil, links: nil, items: nil, label: "Severity:", value: "Moderate"),
-        AlertBlock(type: "labeledSection", level: nil, text: nil, links: nil, items: nil, label: "Weather Event Onset", value: "Today 3:00 PM"),
-        AlertBlock(type: "labeledSection", level: nil, text: nil, links: nil, items: nil, label: "Description", value: "* WHAT... Heavy rain expected. * WHERE... Portions of the area. * WHEN... Through this evening."),
-        AlertBlock(type: "labeledSection", level: nil, text: nil, links: [AlertLink(href: "https://example.com", text: "View Alert Source")], items: nil, label: "Issued By", value: "National Weather Service")
-    ]
-
-    return ZStack {
+    ZStack {
         Color.black.edgesIgnoringSafeArea(.all)
         AlertDetailView(
             title: "Flood Watch",
@@ -1713,9 +1706,5 @@ struct AlertDetailView: View {
             alertIndex: 0,
             totalAlerts: 1
         )
-        .onAppear {
-            // Simulate parsed content for the preview
-            // Note: In previews, the web view won't run; we inject sample blocks.
-        }
     }
 }

@@ -629,7 +629,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
             return
         }
         let hourly = hourlyForecast
-        
+
         let key = "\(locationKey)-\(currentWeather.date.timeIntervalSince1970)-\(daily.highTemperature.value)-\(daily.lowTemperature.value)-\(currentWeather.condition.rawValue)-\(hourly.first?.date.timeIntervalSince1970 ?? 0)"
         if lastSummaryKey == key, aiSummaryShort != nil || aiSummaryLong != nil {
             DispatchQueue.main.async {
@@ -638,11 +638,11 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
             return
         }
         lastSummaryKey = key
-        
+
         DispatchQueue.main.async {
             self.aiSummaryStatus = ""
         }
-        
+
         aiSummaryTask?.cancel()
         aiSummaryTask = Task.detached(priority: .userInitiated) { [hourly, currentWeather, daily, locationKey] in
             do {
@@ -654,7 +654,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 Use whole numbers only (no decimals) for all numeric values.
                 Respond in English.
                 """)
-                
+
                 let useCelsius = UserDefaults.standard.bool(forKey: "useCelsius")
                 let prompt = Self.summaryPrompt(
                     current: currentWeather,
@@ -662,7 +662,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                     hourly: hourly,
                     useCelsius: useCelsius
                 )
-                
+
                 let response = try await session.respond(to: prompt)
                 let text = Self.normalizedWholeNumberText(response.content)
                 let lines = text
@@ -670,7 +670,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .map { Self.stripLinePrefix($0) }
                     .filter { !$0.isEmpty }
-                
+
                 let shortLine = lines.first
                 let longLine: String?
                 if lines.count >= 2 {
@@ -678,7 +678,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 } else {
                     longLine = shortLine
                 }
-                
+
                 DispatchQueue.main.async {
                     if self.lastSummaryKey == key, self.activeLocationKey == locationKey {
                         self.aiSummaryShort = shortLine
@@ -701,17 +701,14 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 }
             }
         }
-#endif
-        return
 #else
         DispatchQueue.main.async {
             self.aiSummaryStatus = "Apple Intelligence not available in this build."
         }
-        return
 #endif
     }
     
-    private static func summaryPrompt(
+    nonisolated private static func summaryPrompt(
         current: CurrentWeather,
         daily: DayWeather,
         hourly: [HourWeather],
@@ -733,21 +730,21 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         """
     }
 
-    private static func tempString(_ temp: Measurement<UnitTemperature>, useCelsius: Bool) -> String {
+    nonisolated private static func tempString(_ temp: Measurement<UnitTemperature>, useCelsius: Bool) -> String {
         let unit: UnitTemperature = useCelsius ? .celsius : .fahrenheit
         let value = temp.converted(to: unit).value
         let rounded = Int(value.rounded())
         return "\(rounded)°\(useCelsius ? "C" : "F")"
     }
 
-    private static func speedString(_ speed: Measurement<UnitSpeed>, useCelsius: Bool) -> String {
+    nonisolated private static func speedString(_ speed: Measurement<UnitSpeed>, useCelsius: Bool) -> String {
         let unit: UnitSpeed = useCelsius ? .kilometersPerHour : .milesPerHour
         let value = speed.converted(to: unit).value
         let rounded = Int(value.rounded())
         return "\(rounded) \(useCelsius ? "km/h" : "mph")"
     }
 
-    private static func conditionLabel(_ condition: WeatherCondition) -> String {
+    nonisolated private static func conditionLabel(_ condition: WeatherCondition) -> String {
         let raw = condition.rawValue.replacingOccurrences(of: "_", with: " ")
         let spaced = raw.replacingOccurrences(
             of: "([a-z])([A-Z])",
@@ -757,7 +754,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         return spaced.lowercased()
     }
 
-    private static func normalizedWholeNumberText(_ text: String) -> String {
+    nonisolated private static func normalizedWholeNumberText(_ text: String) -> String {
         let pattern = #"(-?\d+)\.(\d+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
             return text
@@ -774,7 +771,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         return result
     }
 
-    private static func stripLinePrefix(_ line: String) -> String {
+    nonisolated private static func stripLinePrefix(_ line: String) -> String {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefixes = ["Line 1:", "Line 2:", "Line 1 -", "Line 2 -", "Line1:", "Line2:"]
         for prefix in prefixes {
