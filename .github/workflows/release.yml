@@ -26,7 +26,7 @@ jobs:
         run: |
           brew update
           brew install sparkle
-          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix sparkle)/bin" >> "$GITHUB_PATH"
 
       - name: Import signing certificate
         env:
@@ -96,7 +96,7 @@ jobs:
 
       - name: Generate appcast
         run: |
-          "$(brew --prefix)/bin/generate_appcast" \
+          "$(brew --prefix sparkle)/bin/generate_appcast" \
             --ed-key-file sparkle_private_key \
             --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/" \
             --output "$DIST_DIR/appcast.xml" \
