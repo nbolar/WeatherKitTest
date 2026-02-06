@@ -27,8 +27,8 @@ jobs:
           SPARKLE_VERSION="2.8.1"
           curl -L -o sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
           tar -xf sparkle.tar.xz
-          SPARKLE_ROOT="$(find "$PWD" -maxdepth 2 -type d -name 'Sparkle-*' | head -n 1)"
-          SPARKLE_BIN="$SPARKLE_ROOT/bin"
+          GENERATE_APPCAT_PATH="$(find "$PWD" -type f -name 'generate_appcast' | head -n 1)"
+          SPARKLE_BIN="$(dirname "$GENERATE_APPCAT_PATH")"
           echo "SPARKLE_BIN=$SPARKLE_BIN" >> "$GITHUB_ENV"
 
       - name: Import signing certificate
