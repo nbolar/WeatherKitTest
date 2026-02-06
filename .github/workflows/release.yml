@@ -22,11 +22,12 @@ jobs:
       - name: Select Xcode 26.2
         run: sudo xcode-select -s /Applications/Xcode_26.2.app
 
-      - name: Install Sparkle tools
+      - name: Download Sparkle tools
         run: |
-          brew update
-          brew install sparkle
-          echo "$(brew --prefix sparkle)/bin" >> "$GITHUB_PATH"
+          SPARKLE_VERSION="2.8.1"
+          curl -L -o sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          tar -xf sparkle.tar.xz
+          echo "$PWD/Sparkle-${SPARKLE_VERSION}/bin" >> "$GITHUB_PATH"
 
       - name: Import signing certificate
         env:
@@ -96,7 +97,7 @@ jobs:
 
       - name: Generate appcast
         run: |
-          "$(brew --prefix sparkle)/bin/generate_appcast" \
+          "generate_appcast" \
             --ed-key-file sparkle_private_key \
             --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/" \
             --output "$DIST_DIR/appcast.xml" \
