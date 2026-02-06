@@ -41,6 +41,21 @@ jobs:
           security import cert.p12 -k build.keychain -P "$CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
 
+      - name: Install WeatherKit provisioning profile
+        env:
+          WK_PROFILE_BASE64: ${{ secrets.WEATHERKIT_PROFILE_BASE64 }}
+        run: |
+          if [ -z "$WK_PROFILE_BASE64" ]; then
+            echo "WeatherKit provisioning profile not provided."
+            exit 1
+          fi
+          PROFILE_PATH="$RUNNER_TEMP/WeatherKit.provisionprofile"
+          echo "$WK_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")")
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/$UUID.provisionprofile
+          echo "WK_PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
+
       - name: Build app
         run: |
           xcodebuild \
@@ -52,8 +67,8 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application" \
             DEVELOPMENT_TEAM="KALT4PNG4U" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            PROVISIONING_PROFILE="" \
+            PROVISIONING_PROFILE_SPECIFIER="$WK_PROFILE_UUID" \
+            PROVISIONING_PROFILE="$WK_PROFILE_UUID" \
             MACOSX_DEPLOYMENT_TARGET=15.5 \
             build
 
