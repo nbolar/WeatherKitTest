@@ -4,6 +4,7 @@ import CoreLocation
 import Combine
 import MapKit
 import AppKit
+import Sparkle
 
 // MARK: - App Entry Point
 
@@ -24,6 +25,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var weatherViewModel: WeatherViewModel?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UpdateManager.shared.start()
+
         // Create status bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         
@@ -82,5 +85,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.imagePosition = .imageLeading
             button.title = " \(temp)°"
         }
+    }
+}
+
+final class UpdateManager: ObservableObject {
+    static let shared = UpdateManager()
+    private var updaterController: SPUStandardUpdaterController?
+
+    private init() {}
+
+    func start() {
+        if updaterController == nil {
+            updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+        }
+    }
+
+    func checkForUpdates() {
+        updaterController?.checkForUpdates(nil)
     }
 }

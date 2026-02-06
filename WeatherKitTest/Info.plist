@@ -18,5 +18,13 @@
 	<string></string>
 	<key>OWMAPIKey</key>
 	<string>db19018b47fb2e836c3cb278a4f0e85f</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/nbolar/WeatherKitTest/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>3Fr24AIxySTikKQQhbRTMa+VZB9ntNu1fucFvodGeUE=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
 </dict>
 </plist>

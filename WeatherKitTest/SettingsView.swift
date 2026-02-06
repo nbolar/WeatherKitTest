@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import WeatherKit
+import Sparkle
 
 #if canImport(WeatherKit)
 // WeatherAttribution is provided by WeatherKit on supported platforms.
@@ -102,7 +103,7 @@ struct InAppSettingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
 
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 9) {
                 SettingsSectionSimple(title: "General") {
                     SettingsRow(title: "Temperature", subtitle: "Units for forecasts and charts.") {
                         Picker("", selection: $useCelsius) {
@@ -131,8 +132,8 @@ struct InAppSettingsView: View {
                             }
                         }
                 }
-
-                SettingsSectionSimple(title: "Updates") {
+                SettingsRowDivider()
+                SettingsSectionSimple(title: "Refresh") {
                     SettingsRow(title: "Auto‑Refresh", subtitle: "Update weather data automatically.") {
                         HStack(spacing: 6) {
                             Text("Every")
@@ -164,14 +165,10 @@ struct InAppSettingsView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(Color.white.opacity(0.22))
                     }
+
                 }
-
+                SettingsRowDivider()
                 SettingsSectionSimple(title: "About") {
-                    SettingsRow(title: "Attribution", subtitle: "Data sources for weather and air quality.") {
-                        SettingsAttributionView(weatherAttribution: viewModel.weatherAttribution)
-                    }
-
-                    SettingsRowDivider()
                     SettingsRow(title: "Quit App", subtitle: "Close WeatherKitTest.") {
                         Button {
                             quitApp()
@@ -182,9 +179,29 @@ struct InAppSettingsView: View {
                         .buttonStyle(.borderedProminent)
                         .tint(Color.white.opacity(0.22))
                     }
+                    SettingsRowDivider()
+                    SettingsRow(title: "Check for App Updates", subtitle: "Look for a newer version now.") {
+                        Button {
+                            UpdateManager.shared.checkForUpdates()
+                            dismiss()
+                        } label: {
+                            Label("Check Now", systemImage: "")
+                                .labelStyle(.titleOnly)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.white.opacity(0.22))
+                    }
+                    SettingsRowDivider()
+                    SettingsRow(title: "Attribution", subtitle: "Data sources for weather and air quality.") {
+                        SettingsAttributionView(weatherAttribution: viewModel.weatherAttribution)
+                    }
                 }
+                
+
             }
             .padding(.bottom, 6)
+
+            SettingsFooterVersion(text: appVersionText)
         }
     }
 
@@ -234,6 +251,12 @@ struct InAppSettingsView: View {
             isPresented = false
         }
     }
+
+    private var appVersionText: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
+        return "Version \(version) (\(build))"
+    }
 }
 
 private struct SettingsSectionSimple<Content: View>: View {
@@ -241,7 +264,7 @@ private struct SettingsSectionSimple<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             Text(title.uppercased())
                 .font(.caption.weight(.semibold))
                 .foregroundColor(.white.opacity(0.7))
@@ -284,7 +307,21 @@ private struct SettingsRowDivider: View {
         Rectangle()
             .fill(Color.white.opacity(0.10))
             .frame(height: 1)
-            .padding(.vertical, 4)
+    }
+}
+
+private struct SettingsFooterVersion: View {
+    let text: String
+
+    var body: some View {
+        HStack {
+            Spacer()
+            Text(text)
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.45))
+            Spacer()
+        }
+        .padding(.top, 8)
     }
 }
 
@@ -297,6 +334,18 @@ struct SettingsAttributionView: View {
         let mark = preferredMarkSelection()
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
+                
+
+                
+                Link("Open-Meteo", destination: URL(string: "https://open-meteo.com")!)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.8))
+                    .frame(height: 10)
+                
+                Text("•")
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.55))
+                
                 if let markURL = mark.url {
                     AsyncImage(url: markURL) { image in
                         image
@@ -310,28 +359,21 @@ struct SettingsAttributionView: View {
                             .font(.caption2)
                             .foregroundColor(.white.opacity(0.85))
                     }
-                    .frame(height: 14)
+                    .frame(height: 10)
                 } else {
                     Text(weatherAttribution?.serviceName ?? "Apple Weather")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.85))
                 }
-                
-                Text("•")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.55))
-                
-                Link("Open-Meteo", destination: URL(string: "https://open-meteo.com")!)
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.8))
+
             }
             
-            if let legal = weatherAttribution?.legalAttributionText {
-                Text(legal)
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.55))
-                    .lineLimit(2)
-            }
+//            if let legal = weatherAttribution?.legalAttributionText {
+//                Text(legal)
+//                    .font(.caption2)
+//                    .foregroundColor(.white.opacity(0.55))
+//                    .lineLimit(2)
+//            }
         }
         .padding(.top, 2)
     }
@@ -359,4 +401,11 @@ struct SettingsAttributionView: View {
         }
         return (nil, false)
     }
+}
+#Preview("In-App Settings") {
+    // Provide required arguments for preview
+    InAppSettingsView(
+        isPresented: .constant(true),
+        viewModel: WeatherViewModel()
+    )
 }
