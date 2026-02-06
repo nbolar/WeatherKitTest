@@ -49,6 +49,12 @@ jobs:
             -configuration Release \
             -destination "platform=macOS" \
             -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            DEVELOPMENT_TEAM="KALT4PNG4U" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            PROVISIONING_PROFILE="" \
+            MACOSX_DEPLOYMENT_TARGET=15.5 \
             build
 
       - name: Package app
