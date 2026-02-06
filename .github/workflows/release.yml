@@ -38,6 +38,7 @@ jobs:
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -l build.keychain
           security import cert.p12 -k build.keychain -P "$CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
           security list-keychains -d user -s build.keychain
@@ -68,6 +69,8 @@ jobs:
             -derivedDataPath "$DERIVED_DATA" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application: Nikhil Bolar (KALT4PNG4U)" \
+            CODE_SIGN_KEYCHAIN=build.keychain \
+            OTHER_CODE_SIGN_FLAGS="--keychain build.keychain" \
             DEVELOPMENT_TEAM="KALT4PNG4U" \
             PROVISIONING_PROFILE_SPECIFIER="$WK_PROFILE_UUID" \
             PROVISIONING_PROFILE="$WK_PROFILE_UUID" \
