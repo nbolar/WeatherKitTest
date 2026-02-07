@@ -8,21 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		4E01ED5D2F36820800DD5E24 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 4E01ED5C2F36820800DD5E24 /* Sparkle */; };
-		4E01ED5E2F36820800DD5E24 /* Sparkle in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 4E01ED5C2F36820800DD5E24 /* Sparkle */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		4E01ED5F2F36820800DD5E24 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				4E01ED5E2F36820800DD5E24 /* Sparkle in Embed Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		4ED0CD762F21DBD2007C175D /* WeatherKitTest.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WeatherKitTest.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -73,7 +59,6 @@
 			buildPhases = (
 				4ED0CD722F21DBD2007C175D /* Sources */,
 				4ED0CD732F21DBD2007C175D /* Frameworks */,
-				4E01ED5F2F36820800DD5E24 /* Embed Frameworks */,
 				4ED0CD742F21DBD2007C175D /* Resources */,
 			);
 			buildRules = (
