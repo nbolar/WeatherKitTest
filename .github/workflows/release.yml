@@ -81,12 +81,32 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application: Nikhil Bolar (KALT4PNG4U)" \
             CODE_SIGN_KEYCHAIN=build.keychain \
-            OTHER_CODE_SIGN_FLAGS="--keychain build.keychain" \
+            OTHER_CODE_SIGN_FLAGS="--keychain build.keychain --options runtime --timestamp" \
             DEVELOPMENT_TEAM="KALT4PNG4U" \
             PROVISIONING_PROFILE_SPECIFIER="$WK_PROFILE_UUID" \
             PROVISIONING_PROFILE="$WK_PROFILE_UUID" \
             MACOSX_DEPLOYMENT_TARGET=15.5 \
             build
+
+      - name: Notarize app
+        env:
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          NOTARY_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+        run: |
+          if [ -z "$NOTARY_KEY_ID" ] || [ -z "$NOTARY_ISSUER_ID" ] || [ -z "$NOTARY_KEY" ]; then
+            echo "Notary credentials missing. Set APPLE_NOTARY_KEY_ID, APPLE_NOTARY_ISSUER_ID, APPLE_NOTARY_PRIVATE_KEY."
+            exit 1
+          fi
+          APP_PATH="$DERIVED_DATA/Build/Products/Release/$APP_NAME.app"
+          NOTARY_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          echo "$NOTARY_KEY" > "$NOTARY_KEY_PATH"
+          xcrun notarytool submit "$APP_PATH" \
+            --key "$NOTARY_KEY_PATH" \
+            --key-id "$NOTARY_KEY_ID" \
+            --issuer "$NOTARY_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "$APP_PATH"
 
       - name: Package app
         run: |
