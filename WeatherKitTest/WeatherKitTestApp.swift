@@ -89,17 +89,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
-final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate {
+final class UpdateManager: ObservableObject {
     static let shared = UpdateManager()
     private var updaterController: SPUStandardUpdaterController?
 
-    private override init() {
-        super.init()
-    }
+    private init() {}
 
     func start() {
         if updaterController == nil {
-            updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
+            // Let Sparkle present its own UI/errors. We only preflight the feed URL for clearer 404/401 messaging.
+            updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
         }
     }
 
@@ -138,12 +137,6 @@ final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate {
         } else {
             updaterController?.checkForUpdates(nil)
         }
-    }
-
-    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
-        let nsError = error as NSError
-        let message = nsError.localizedDescription
-        showFeedError(title: "Update Error", message: message)
     }
 
     private func showFeedError(title: String, message: String) {
