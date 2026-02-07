@@ -98,6 +98,11 @@ jobs:
           fi
 
           IDENTITY="Developer ID Application: Nikhil Bolar (KALT4PNG4U)"
+          APP_ENTITLEMENTS="$GITHUB_WORKSPACE/WeatherKitTest/WeatherKitTest.entitlements"
+          if [ ! -f "$APP_ENTITLEMENTS" ]; then
+            echo "Missing entitlements file at $APP_ENTITLEMENTS"
+            exit 1
+          fi
 
           # Resign nested Sparkle bundles with our Developer ID + timestamp so notary accepts them.
           # Order matters: inner bundles first, then framework, then the app.
@@ -105,9 +110,20 @@ jobs:
             /usr/bin/codesign --force --sign "$IDENTITY" \
               --keychain build.keychain \
               --options runtime --timestamp \
-              --preserve-metadata=identifier,entitlements,requirements,flags \
+              --preserve-metadata=identifier,requirements,flags \
               "$bundle"
           done < <(find "$SPARKLE_FW" -mindepth 2 -type d \( -name "*.app" -o -name "*.xpc" \) -print0)
+
+          # Sparkle also ships standalone Mach-O helpers (e.g. Autoupdate) inside the framework.
+          while IFS= read -r -d '' macho; do
+            if /usr/bin/file "$macho" | /usr/bin/grep -q "Mach-O"; then
+              /usr/bin/codesign --force --sign "$IDENTITY" \
+                --keychain build.keychain \
+                --options runtime --timestamp \
+                --preserve-metadata=identifier,requirements,flags \
+                "$macho"
+            fi
+          done < <(find "$SPARKLE_FW" -type f -print0)
 
           /usr/bin/codesign --force --sign "$IDENTITY" \
             --keychain build.keychain \
@@ -118,10 +134,16 @@ jobs:
           /usr/bin/codesign --force --sign "$IDENTITY" \
             --keychain build.keychain \
             --options runtime --timestamp \
-            --preserve-metadata=identifier,entitlements,requirements,flags \
+            --entitlements "$APP_ENTITLEMENTS" \
+            --preserve-metadata=identifier,requirements,flags \
             "$APP_PATH"
 
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          /usr/bin/codesign -d --entitlements :- "$APP_PATH" 2>/dev/null | /usr/bin/grep -q "get-task-allow" && {
+            echo "ERROR: get-task-allow entitlement still present after re-sign."
+            /usr/bin/codesign -d --entitlements :- "$APP_PATH" || true
+            exit 1
+          } || true
 
       - name: Notarize app
         env:
