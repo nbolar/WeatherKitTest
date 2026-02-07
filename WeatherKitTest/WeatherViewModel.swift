@@ -208,7 +208,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         guard CLLocationManager.locationServicesEnabled() else {
             DispatchQueue.main.async {
                 self.isLoading = false
-                self.errorMessage = "Location services are disabled. Enable Location Services in System Settings."
+                self.errorMessage = "Location Services are turned off system-wide. Enable them in System Settings > Privacy & Security > Location Services."
             }
             return
         }
