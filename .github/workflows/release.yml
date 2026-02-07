@@ -111,7 +111,8 @@ jobs:
             --wait \
             --output-format json > "$RUNNER_TEMP/notary-result.json"
 
-          python3 - <<'PY'
+          # Export vars for this step (GITHUB_ENV is only applied to subsequent steps).
+          eval "$(python3 - <<'PY'
           import json, os, sys
           p = os.environ["RUNNER_TEMP"] + "/notary-result.json"
           with open(p, "r", encoding="utf-8") as f:
@@ -119,23 +120,28 @@ jobs:
           # notarytool returns keys: id, status, message (optional)
           sub_id = data.get("id", "")
           status = (data.get("status") or "").strip()
-          print(f"Notary submission id: {sub_id}")
-          print(f"Notary status: {status}")
           if not sub_id:
-              print("Missing submission id from notarytool output.")
+              sys.stderr.write("Missing submission id from notarytool output.\n")
               sys.exit(1)
-          # Persist id/status for subsequent shell checks.
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              env.write(f"NOTARY_SUBMISSION_ID={sub_id}\n")
-              env.write(f"NOTARY_STATUS={status}\n")
+          print(f'NOTARY_SUBMISSION_ID="{sub_id}"')
+          print(f'NOTARY_STATUS="{status}"')
           PY
+          )"
+
+          echo "Notary submission id: ${NOTARY_SUBMISSION_ID}"
+          echo "Notary status: ${NOTARY_STATUS}"
 
           if [ "${NOTARY_STATUS}" != "Accepted" ]; then
             echo "Notarization failed (status: ${NOTARY_STATUS}). Fetching notary log..."
+            NOTARY_LOG_PATH="$RUNNER_TEMP/notary-log.json"
             xcrun notarytool log "${NOTARY_SUBMISSION_ID}" \
               --key "$NOTARY_KEY_PATH" \
               --key-id "$NOTARY_KEY_ID" \
-              --issuer "$NOTARY_ISSUER_ID" || true
+              --issuer "$NOTARY_ISSUER_ID" \
+              "$NOTARY_LOG_PATH" || true
+            if [ -f "$NOTARY_LOG_PATH" ]; then
+              cat "$NOTARY_LOG_PATH"
+            fi
             exit 1
           fi
 
