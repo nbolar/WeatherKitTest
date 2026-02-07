@@ -116,6 +116,20 @@ jobs:
             if [[ "$bundle" == *.app ]]; then
               extra+=(--entitlements "$SPARKLE_UPDATER_ENTITLEMENTS")
             fi
+            # When signing a .app bundle, ensure the main executable gets the entitlement too.
+            # (Signing only the bundle directory can be finicky across Xcode/SDK versions.)
+            if [[ "$bundle" == *.app ]] && [ -d "$bundle/Contents/MacOS" ]; then
+              while IFS= read -r -d '' exe; do
+                if /usr/bin/file "$exe" | /usr/bin/grep -q "Mach-O"; then
+                  /usr/bin/codesign --force --sign "$IDENTITY" \
+                    --keychain build.keychain \
+                    --options runtime --timestamp \
+                    --entitlements "$SPARKLE_UPDATER_ENTITLEMENTS" \
+                    --preserve-metadata=identifier,requirements,flags \
+                    "$exe"
+                fi
+              done < <(find "$bundle/Contents/MacOS" -type f -print0)
+            fi
             /usr/bin/codesign --force --sign "$IDENTITY" \
               --keychain build.keychain \
               --options runtime --timestamp \
@@ -126,6 +140,11 @@ jobs:
 
           # Sparkle also ships standalone Mach-O helpers (e.g. Autoupdate) inside the framework.
           while IFS= read -r -d '' macho; do
+            # Only sign loose Mach-O files that are not inside a nested code bundle (.app/.xpc),
+            # otherwise we can accidentally wipe entitlements that are required (e.g. AppleEvents).
+            if [[ "$macho" == *".app/"* ]] || [[ "$macho" == *".xpc/"* ]]; then
+              continue
+            fi
             if /usr/bin/file "$macho" | /usr/bin/grep -q "Mach-O"; then
               /usr/bin/codesign --force --sign "$IDENTITY" \
                 --keychain build.keychain \
@@ -154,6 +173,15 @@ jobs:
             /usr/bin/codesign -d --entitlements :- "$APP_PATH" || true
             exit 1
           } || true
+
+          UPDATER_EXE="$(find "$SPARKLE_FW" -path '*/Updater.app/Contents/MacOS/Updater' | head -n 1)"
+          if [ -n "$UPDATER_EXE" ]; then
+            /usr/bin/codesign -d --entitlements :- "$UPDATER_EXE" 2>/dev/null | /usr/bin/grep -q "com.apple.security.automation.apple-events" || {
+              echo "ERROR: Sparkle Updater executable missing AppleEvents entitlement after signing: $UPDATER_EXE"
+              /usr/bin/codesign -d --entitlements :- "$UPDATER_EXE" || true
+              exit 1
+            }
+          fi
 
       - name: Notarize app
         env:
