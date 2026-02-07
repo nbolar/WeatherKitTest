@@ -39,6 +39,8 @@ struct InAppSettingsView: View {
     }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let primaryActionTint = Color(red: 0.24, green: 0.21, blue: 0.28).opacity(0.75)
+    private let primaryActionBorder = Color.white.opacity(0.30)
     
     var body: some View {
         ZStack {
@@ -175,9 +177,10 @@ struct InAppSettingsView: View {
                             Label("Refresh Now", systemImage: "arrow.clockwise")
                                 .labelStyle(.titleAndIcon)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.white.opacity(0.22))
+                        .buttonStyle(GlassActionButtonStyle())
+                        .padding(.vertical,5)
                     }
+                    .padding(.vertical,-5)
 
                 }
                 SettingsRowDivider()
@@ -189,8 +192,7 @@ struct InAppSettingsView: View {
                             Label("Quit", systemImage: "xmark")
                                 .labelStyle(.titleOnly)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.white.opacity(0.22))
+                        .buttonStyle(GlassActionButtonStyle())
                     }
                     SettingsRowDivider()
                     SettingsRow(title: "Check for App Updates", subtitle: "Look for a newer version now.") {
@@ -201,8 +203,7 @@ struct InAppSettingsView: View {
                             Label("Check Now", systemImage: "")
                                 .labelStyle(.titleOnly)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.white.opacity(0.22))
+                        .buttonStyle(GlassActionButtonStyle())
                     }
                     SettingsRowDivider()
                     SettingsRow(title: "Attribution", subtitle: "Data sources for weather and air quality.") {
@@ -329,6 +330,42 @@ private struct SettingsRowDivider: View {
     }
 }
 
+private struct GlassActionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.caption2.weight(.medium))
+            .foregroundColor(.white.opacity(0.92))
+            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.white.opacity(configuration.isPressed ? 0.28 : 0.18), lineWidth: 1)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(configuration.isPressed ? 0.20 : 0.05),
+                                Color.white.opacity(0.00)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .blendMode(.screen)
+                    .allowsHitTesting(false)
+            )
+            .shadow(color: Color.black.opacity(configuration.isPressed ? 0.18 : 0.22), radius: 0, x: 0, y: 0)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .animation(.spring(response: 0.22, dampingFraction: 0.85), value: configuration.isPressed)
+    }
+}
+
 private struct SettingsFooterVersion: View {
     let text: String
 
@@ -386,6 +423,7 @@ struct SettingsAttributionView: View {
                 }
 
             }
+            
             
 //            if let legal = weatherAttribution?.legalAttributionText {
 //                Text(legal)

@@ -19,13 +19,14 @@ final class WeatherNotificationManager {
 
     func handleCurrentLocationNotifications(
         locationName: String?,
+        currentWeather: CurrentWeather?,
         alerts: [WeatherAlert],
         minuteForecast: Forecast<MinuteWeather>?
     ) async {
         let settings = await center.notificationSettings()
         guard settings.authorizationStatus == .authorized else { return }
         await scheduleSevereAlerts(alerts, locationName: locationName)
-        await schedulePrecipitationIfNeeded(minuteForecast, locationName: locationName)
+        await schedulePrecipitationIfNeeded(minuteForecast, currentWeather: currentWeather, locationName: locationName)
     }
 
     private func scheduleSevereAlerts(_ alerts: [WeatherAlert], locationName: String?) async {
@@ -57,7 +58,7 @@ final class WeatherNotificationManager {
         saveSeenAlertIDs(seen)
     }
 
-    private func schedulePrecipitationIfNeeded(_ minuteForecast: Forecast<MinuteWeather>?, locationName: String?) async {
+    private func schedulePrecipitationIfNeeded(_ minuteForecast: Forecast<MinuteWeather>?, currentWeather: CurrentWeather?, locationName: String?) async {
         guard let minuteForecast else { return }
         let minutes = Array(minuteForecast.prefix(60))
         let threshold = 0.1
@@ -74,8 +75,9 @@ final class WeatherNotificationManager {
             return
         }
 
+        let precipType = classifyPrecipitationType(first, current: currentWeather)
         let maxIntensity = minutes.map { $0.precipitationIntensity.value }.max() ?? first.precipitationIntensity.value
-        let intensityLabel = intensityDescription(maxIntensity)
+        let intensityLabel = intensityDescription(maxIntensity, type: precipType)
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         let startString = formatter.string(from: first.date)
@@ -97,16 +99,56 @@ final class WeatherNotificationManager {
         defaults.set(startTime, forKey: precipStartKey)
     }
 
-    private func intensityDescription(_ mmPerHour: Double) -> String {
+    private enum PrecipitationType {
+        case rain
+        case snow
+        case sleet
+        case hail
+        case freezing
+        case mixed
+    }
+
+    private func classifyPrecipitationType(_ minute: MinuteWeather, current: CurrentWeather?) -> PrecipitationType {
+        // MinuteWeather doesn't expose a precipitation-type enum.
+        // Prefer the current condition when available, then fall back to temperature around freezing.
+        if let current {
+            let condition = current.condition.description.lowercased()
+            if condition.contains("hail") { return .hail }
+            if condition.contains("sleet") { return .sleet }
+            if condition.contains("freezing") || condition.contains("ice") { return .freezing }
+            if condition.contains("snow") { return .snow }
+            if condition.contains("mix") { return .mixed }
+            
+            // Fall back to temperature-based classification
+            let c = current.temperature.converted(to: .celsius).value
+            if c <= 0.5 { return .snow }
+            if c < 2.0 { return .mixed }
+        }
+        
+        // Default to rain if no current weather is available
+        return .rain
+    }
+
+    private func intensityDescription(_ mmPerHour: Double, type: PrecipitationType) -> String {
+        let kind: String = {
+            switch type {
+            case .rain: return "rain"
+            case .snow: return "snow"
+            case .sleet: return "sleet"
+            case .hail: return "hail"
+            case .freezing: return "freezing rain"
+            case .mixed: return "precipitation"
+            }
+        }()
         switch mmPerHour {
         case ..<0.5:
-            return "Light rain"
+            return "Light \(kind)"
         case ..<2.0:
-            return "Moderate rain"
+            return "Moderate \(kind)"
         case ..<10.0:
-            return "Heavy rain"
+            return "Heavy \(kind)"
         default:
-            return "Intense rain"
+            return "Intense \(kind)"
         }
     }
 

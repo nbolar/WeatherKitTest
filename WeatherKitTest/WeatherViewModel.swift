@@ -564,6 +564,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         Task {
             await WeatherNotificationManager.shared.handleCurrentLocationNotifications(
                 locationName: locationName,
+                currentWeather: currentWeather,
                 alerts: alerts,
                 minuteForecast: minuteForecast
             )

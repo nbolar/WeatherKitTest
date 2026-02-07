@@ -405,6 +405,7 @@ struct ContentView: View {
                     CurrentWeatherView(
                         weather: weather,
                         locationName: viewModel.locationName,
+                        isCurrentLocation: viewModel.currentLocationIndex == nil,
                         dailyForecast: viewModel.dailyForecast.first,
                         alerts: viewModel.weatherAlerts,
                         locationTimeZone: viewModel.locationTimeZone,

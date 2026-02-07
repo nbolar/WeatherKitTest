@@ -7,6 +7,7 @@ import Charts
 struct CurrentWeatherView: View {
     let weather: CurrentWeather
     let locationName: String?
+    let isCurrentLocation: Bool
     let dailyForecast: DayWeather?
     let alerts: [WeatherAlert]
     let locationTimeZone: TimeZone?
@@ -61,9 +62,11 @@ struct CurrentWeatherView: View {
         VStack(spacing: 4) {
             if let locationName {
                 HStack {
-                    Image(systemName: "location.fill")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.7))
+                    if isCurrentLocation {
+                        Image(systemName: "location.fill")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.7))
+                    }
                     Text(locationName)
                         .font(.callout)
                         .fontWeight(.medium)
