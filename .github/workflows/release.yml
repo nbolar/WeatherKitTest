@@ -51,6 +51,12 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain
           security list-keychains -d user -s build.keychain
           security find-identity -p codesigning -v build.keychain
+          DEVID_SHA=$(security find-identity -p codesigning -v build.keychain | awk -F\" '/Developer ID Application/ {print $2; exit}')
+          if [ -z "$DEVID_SHA" ]; then
+            echo "Developer ID Application identity not found in build.keychain"
+            exit 1
+          fi
+          echo "DEVELOPER_ID_SHA=$DEVID_SHA" >> "$GITHUB_ENV"
 
       - name: Install WeatherKit provisioning profile
         env:
@@ -79,7 +85,7 @@ jobs:
             MARKETING_VERSION="$VERSION" \
             CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Developer ID Application: Nikhil Bolar (KALT4PNG4U)" \
+            CODE_SIGN_IDENTITY="$DEVELOPER_ID_SHA" \
             CODE_SIGN_KEYCHAIN=build.keychain \
             OTHER_CODE_SIGN_FLAGS="--keychain build.keychain --options runtime --timestamp" \
             DEVELOPMENT_TEAM="KALT4PNG4U" \
@@ -97,7 +103,7 @@ jobs:
             exit 1
           fi
 
-          IDENTITY="Developer ID Application: Nikhil Bolar (KALT4PNG4U)"
+          IDENTITY="$DEVELOPER_ID_SHA"
           APP_ENTITLEMENTS="$GITHUB_WORKSPACE/WeatherKitTest/WeatherKitTest.entitlements"
           SPARKLE_UPDATER_ENTITLEMENTS="$GITHUB_WORKSPACE/WeatherKitTest/SparkleUpdater.entitlements"
           if [ ! -f "$APP_ENTITLEMENTS" ]; then
@@ -153,6 +159,16 @@ jobs:
                 "$macho"
             fi
           done < <(find "$SPARKLE_FW" -type f -print0)
+
+          # Ensure Sparkle's Autoupdate helper is signed with our Developer ID + timestamp.
+          AUToupdate_BIN="$(find "$SPARKLE_FW" -path '*/Versions/*/Autoupdate' -type f | head -n 1)"
+          if [ -n "$AUToupdate_BIN" ]; then
+            /usr/bin/codesign --force --sign "$IDENTITY" \
+              --keychain build.keychain \
+              --options runtime --timestamp \
+              "$AUToupdate_BIN"
+            /usr/bin/codesign -dv --verbose=4 "$AUToupdate_BIN" 2>&1 | /usr/bin/grep -E "Authority=|Timestamp=" || true
+          fi
 
           /usr/bin/codesign --force --sign "$IDENTITY" \
             --keychain build.keychain \
