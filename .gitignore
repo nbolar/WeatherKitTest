@@ -1,2 +1,8 @@
 .DS_Store
 /.sparkle/
+*.p12
+*.mobileprovision
+*.pem
+*.key
+*.env
+sparkle_private_key
