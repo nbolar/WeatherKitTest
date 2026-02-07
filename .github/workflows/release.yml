@@ -104,7 +104,9 @@ jobs:
           fi
 
           IDENTITY="$DEVELOPER_ID_SHA"
-          APP_ENTITLEMENTS="$GITHUB_WORKSPACE/WeatherKitTest/WeatherKitTest.entitlements"
+          # Use Xcode's expanded entitlements. The source entitlements contain build-setting
+          # placeholders (eg $(PRODUCT_BUNDLE_IDENTIFIER)) which codesign will not expand.
+          APP_ENTITLEMENTS="$(find "$DERIVED_DATA/Build/Intermediates.noindex" -path '*WeatherKitTest.build/Release/WeatherKitTest.build/DerivedSources/Entitlements.plist' -type f | head -n 1)"
           SPARKLE_UPDATER_ENTITLEMENTS="$GITHUB_WORKSPACE/WeatherKitTest/SparkleUpdater.entitlements"
           if [ ! -f "$APP_ENTITLEMENTS" ]; then
             echo "Missing entitlements file at $APP_ENTITLEMENTS"
@@ -184,6 +186,11 @@ jobs:
             "$APP_PATH"
 
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          /usr/bin/codesign -d --entitlements :- "$APP_PATH" 2>/dev/null | /usr/bin/grep -q '\\$\\(' && {
+            echo "ERROR: Unexpanded build setting found in entitlements (eg \$(PRODUCT_BUNDLE_IDENTIFIER))."
+            /usr/bin/codesign -d --entitlements :- "$APP_PATH" || true
+            exit 1
+          } || true
           /usr/bin/codesign -d --entitlements :- "$APP_PATH" 2>/dev/null | /usr/bin/grep -q "get-task-allow" && {
             echo "ERROR: get-task-allow entitlement still present after re-sign."
             /usr/bin/codesign -d --entitlements :- "$APP_PATH" || true
