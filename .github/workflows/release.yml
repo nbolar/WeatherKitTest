@@ -99,9 +99,12 @@ jobs:
             exit 1
           fi
           APP_PATH="$DERIVED_DATA/Build/Products/Release/$APP_NAME.app"
+          NOTARY_ZIP="$RUNNER_TEMP/$APP_NAME-notary.zip"
           NOTARY_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
           echo "$NOTARY_KEY" > "$NOTARY_KEY_PATH"
-          xcrun notarytool submit "$APP_PATH" \
+          # notarytool requires a .zip/.dmg/.pkg. Zip the .app for submission.
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$NOTARY_ZIP"
+          xcrun notarytool submit "$NOTARY_ZIP" \
             --key "$NOTARY_KEY_PATH" \
             --key-id "$NOTARY_KEY_ID" \
             --issuer "$NOTARY_ISSUER_ID" \
