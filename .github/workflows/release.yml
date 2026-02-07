@@ -69,12 +69,15 @@ jobs:
 
       - name: Build app
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
           xcodebuild \
             -project WeatherKitTest.xcodeproj \
             -scheme WeatherKitTest \
             -configuration Release \
             -destination "platform=macOS" \
             -derivedDataPath "$DERIVED_DATA" \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application: Nikhil Bolar (KALT4PNG4U)" \
             CODE_SIGN_KEYCHAIN=build.keychain \
