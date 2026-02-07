@@ -88,19 +88,72 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-final class UpdateManager: ObservableObject {
+@MainActor
+final class UpdateManager: NSObject, ObservableObject, SPUUpdaterDelegate {
     static let shared = UpdateManager()
     private var updaterController: SPUStandardUpdaterController?
 
-    private init() {}
+    private override init() {
+        super.init()
+    }
 
     func start() {
         if updaterController == nil {
-            updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+            updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
         }
     }
 
     func checkForUpdates() {
-        updaterController?.checkForUpdates(nil)
+        if let feedURL = updaterController?.updater.feedURL, feedURL.absoluteString.isEmpty == false {
+            URLSession.shared.dataTask(with: feedURL) { [weak self] data, response, error in
+                guard let self else { return }
+                if let http = response as? HTTPURLResponse, http.statusCode == 404 {
+                    Task { @MainActor in
+                        self.showFeedError(title: "Update Error", message: "Update feed not found. Make sure appcast.xml is attached to the latest GitHub release.")
+                    }
+                    return
+                }
+                if let http = response as? HTTPURLResponse, http.statusCode == 401 {
+                    Task { @MainActor in
+                        self.showFeedError(title: "Update Error", message: "Update feed requires access. Ensure the GitHub release and assets are public.")
+                    }
+                    return
+                }
+                if error != nil {
+                    Task { @MainActor in
+                        self.showFeedError(title: "Update Error", message: "Unable to reach update feed. Check your internet connection.")
+                    }
+                    return
+                }
+                if data == nil {
+                    Task { @MainActor in
+                        self.showFeedError(title: "Update Error", message: "Update feed returned no data.")
+                    }
+                    return
+                }
+                DispatchQueue.main.async {
+                    self.updaterController?.checkForUpdates(nil)
+                }
+            }.resume()
+        } else {
+            updaterController?.checkForUpdates(nil)
+        }
+    }
+
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        let nsError = error as NSError
+        let message = nsError.localizedDescription
+        showFeedError(title: "Update Error", message: message)
+    }
+
+    private func showFeedError(title: String, message: String) {
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = message
+            alert.addButton(withTitle: "OK")
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
     }
 }

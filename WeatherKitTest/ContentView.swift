@@ -52,7 +52,7 @@ struct ContentView: View {
                     }
                 
                 InAppSettingsView(isPresented: $showSettings, viewModel: viewModel)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .transition(.move(edge: .top))
                     .environment(\.isDaylight, viewModel.currentWeather?.isDaylight)
                     .zIndex(3)
             }

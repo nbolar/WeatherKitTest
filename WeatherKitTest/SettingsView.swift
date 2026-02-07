@@ -26,6 +26,7 @@ struct InAppSettingsView: View {
     private let options = [5, 10, 15, 30, 60, 120, 180]
     
     @StateObject private var launchManager: LaunchAtLoginManager
+    @State private var contentHeight: CGFloat = 0
     
     init(isPresented: Binding<Bool>, viewModel: WeatherViewModel) {
         self._isPresented = isPresented
@@ -44,17 +45,24 @@ struct InAppSettingsView: View {
             GeometryReader { proxy in
                 let maxPanelHeight = min(proxy.size.height * 0.82, 640)
 
-                ViewThatFits(in: .vertical) {
+                ScrollView(showsIndicators: false) {
                     settingsPanelContent
-                    ScrollView(showsIndicators: false) {
-                        settingsPanelContent
-                    }
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear
+                                    .preference(key: SettingsContentHeightKey.self, value: geo.size.height)
+                            }
+                        )
+                }
+                .scrollDisabled(contentHeight <= maxPanelHeight)
+                .onPreferenceChange(SettingsContentHeightKey.self) { newValue in
+                    contentHeight = newValue
                 }
                 .padding(.top, 16)
                 .padding(.bottom, 12)
                 .padding(.horizontal, 16)
                 .frame(width: LiquidGlassTokens.panelWidth, alignment: .topLeading)
-                .frame(maxHeight: maxPanelHeight)
+                .frame(maxHeight: min(maxPanelHeight, contentHeight + 28))
                 .liquidGlassPanel()
                 .overlay(panelChromeOverlay)
                 .overlay(alignment: .topTrailing) {
@@ -93,6 +101,11 @@ struct InAppSettingsView: View {
 
             Text("Settings")
                 .font(.title3.weight(.semibold))
+
+            Text(appVersionText)
+                .font(.caption2.weight(.medium))
+                .foregroundColor(.white.opacity(0.55))
+                .padding(.top, 2)
 
             Spacer()
         }
@@ -201,7 +214,6 @@ struct InAppSettingsView: View {
             }
             .padding(.bottom, 6)
 
-            SettingsFooterVersion(text: appVersionText)
         }
     }
 
@@ -274,6 +286,13 @@ private struct SettingsSectionSimple<Content: View>: View {
             }
             .padding(.horizontal, 6)
         }
+    }
+}
+
+private struct SettingsContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
