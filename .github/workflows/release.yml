@@ -88,6 +88,41 @@ jobs:
             MACOSX_DEPLOYMENT_TARGET=15.5 \
             build
 
+      - name: Re-sign Sparkle helpers (notarization)
+        run: |
+          APP_PATH="$DERIVED_DATA/Build/Products/Release/$APP_NAME.app"
+          SPARKLE_FW="$APP_PATH/Contents/Frameworks/Sparkle.framework"
+          if [ ! -d "$SPARKLE_FW" ]; then
+            echo "Sparkle.framework not embedded at $SPARKLE_FW"
+            exit 1
+          fi
+
+          IDENTITY="Developer ID Application: Nikhil Bolar (KALT4PNG4U)"
+
+          # Resign nested Sparkle bundles with our Developer ID + timestamp so notary accepts them.
+          # Order matters: inner bundles first, then framework, then the app.
+          while IFS= read -r -d '' bundle; do
+            /usr/bin/codesign --force --sign "$IDENTITY" \
+              --keychain build.keychain \
+              --options runtime --timestamp \
+              --preserve-metadata=identifier,entitlements,requirements,flags \
+              "$bundle"
+          done < <(find "$SPARKLE_FW" -mindepth 2 -type d \( -name "*.app" -o -name "*.xpc" \) -print0)
+
+          /usr/bin/codesign --force --sign "$IDENTITY" \
+            --keychain build.keychain \
+            --options runtime --timestamp \
+            --preserve-metadata=identifier,entitlements,requirements,flags \
+            "$SPARKLE_FW"
+
+          /usr/bin/codesign --force --sign "$IDENTITY" \
+            --keychain build.keychain \
+            --options runtime --timestamp \
+            --preserve-metadata=identifier,entitlements,requirements,flags \
+            "$APP_PATH"
+
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
       - name: Notarize app
         env:
           NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
