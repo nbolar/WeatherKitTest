@@ -99,18 +99,28 @@ jobs:
 
           IDENTITY="Developer ID Application: Nikhil Bolar (KALT4PNG4U)"
           APP_ENTITLEMENTS="$GITHUB_WORKSPACE/WeatherKitTest/WeatherKitTest.entitlements"
+          SPARKLE_UPDATER_ENTITLEMENTS="$GITHUB_WORKSPACE/WeatherKitTest/SparkleUpdater.entitlements"
           if [ ! -f "$APP_ENTITLEMENTS" ]; then
             echo "Missing entitlements file at $APP_ENTITLEMENTS"
+            exit 1
+          fi
+          if [ ! -f "$SPARKLE_UPDATER_ENTITLEMENTS" ]; then
+            echo "Missing entitlements file at $SPARKLE_UPDATER_ENTITLEMENTS"
             exit 1
           fi
 
           # Resign nested Sparkle bundles with our Developer ID + timestamp so notary accepts them.
           # Order matters: inner bundles first, then framework, then the app.
           while IFS= read -r -d '' bundle; do
+            extra=()
+            if [[ "$bundle" == *.app ]]; then
+              extra+=(--entitlements "$SPARKLE_UPDATER_ENTITLEMENTS")
+            fi
             /usr/bin/codesign --force --sign "$IDENTITY" \
               --keychain build.keychain \
               --options runtime --timestamp \
               --preserve-metadata=identifier,requirements,flags \
+              "${extra[@]}" \
               "$bundle"
           done < <(find "$SPARKLE_FW" -mindepth 2 -type d \( -name "*.app" -o -name "*.xpc" \) -print0)
 
