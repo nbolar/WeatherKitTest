@@ -151,6 +151,7 @@ struct SavedLocationsList: View {
     let onRemove: (SavedLocation) -> Void
     @State private var currentTime = Date()
     private let timeTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+    @EnvironmentObject private var appVisibility: AppVisibility
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -161,7 +162,7 @@ struct SavedLocationsList: View {
                         isSelected: selectedIndex == index,
                         cachedWeather: cachedWeather[location.id],
                         currentTime: currentTime,
-                        isActive: isExpanded,
+                        isActive: isExpanded && appVisibility.effectsActive,
                         onSelect: { onSelect(index) },
                         onRemove: { onRemove(location) },
                         isReorderMode: isReorderMode,
@@ -509,80 +510,79 @@ private struct MiniWeatherBackdrop: View {
     let isDaylight: Bool
     let isActive: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var drift: CGFloat = 0
 
     var body: some View {
         GeometryReader { geo in
-            let localDrift: CGFloat = (isDaylight && isActive) ? drift : 0
-            ZStack {
-                if isDaylight {
-                    LinearGradient(
-                        colors: gradientColors,
-                        startPoint: UnitPoint(x: 0.15 + localDrift, y: 0.10),
-                        endPoint: UnitPoint(x: 0.85 - localDrift, y: 0.90)
-                    )
-                    .animation(reduceMotion || !isDaylight || !isActive ? nil : .easeInOut(duration: 1.0), value: condition)
+            let shouldAnimate = isDaylight && isActive && !reduceMotion
+            Group {
+                if shouldAnimate {
+                    TimelineView(.animation) { timeline in
+                        let t = timeline.date.timeIntervalSinceReferenceDate
+                        let drift = CGFloat(sin(t * 0.12)) * 0.08
+                        backdropLayer(drift: drift, size: geo.size)
+                    }
                 } else {
-                    Color(red: 0.07, green: 0.09, blue: 0.15)
+                    backdropLayer(drift: 0, size: geo.size)
                 }
+            }
+        }
+    }
 
-                if isDaylight {
+    @ViewBuilder
+    private func backdropLayer(drift: CGFloat, size: CGSize) -> some View {
+        ZStack {
+            if isDaylight {
+                LinearGradient(
+                    colors: gradientColors,
+                    startPoint: UnitPoint(x: 0.15 + drift, y: 0.10),
+                    endPoint: UnitPoint(x: 0.85 - drift, y: 0.90)
+                )
+                .animation(reduceMotion || !isDaylight || !isActive ? nil : .easeInOut(duration: 1.0), value: condition)
+            } else {
+                Color(red: 0.07, green: 0.09, blue: 0.15)
+            }
+
+            if isDaylight {
+                LinearGradient(
+                    colors: depthColors,
+                    startPoint: UnitPoint(x: 0.85 - drift, y: 0.15),
+                    endPoint: UnitPoint(x: 0.10 + drift, y: 0.95)
+                )
+                .blendMode(.overlay)
+                .opacity(0.26)
+            }
+
+            if isActive {
+                effectsLayer(in: size)
+            }
+
+            if !isDaylight, isClearNight {
+                MiniMoon()
+                    .frame(width: 26, height: 26)
+                    .padding(.top, 12)
+                    .padding(.trailing, 110)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .opacity(0.9)
+                    .blendMode(.screen)
+            }
+
+            Rectangle()
+                .fill(
                     LinearGradient(
-                        colors: depthColors,
-                        startPoint: UnitPoint(x: 0.85 - drift, y: 0.15),
-                        endPoint: UnitPoint(x: 0.10 + drift, y: 0.95)
+                        colors: [
+                            Color.black.opacity(isDaylight ? 0.03 : 0.08),
+                            Color.black.opacity(isDaylight ? 0.08 : 0.12)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
                     )
-                    .blendMode(.overlay)
-                    .opacity(0.26)
-                }
+                )
+                .blendMode(isDaylight ? .multiply : .normal)
 
-                if isActive {
-                    effectsLayer(in: geo.size)
-                }
-
-                if !isDaylight, isClearNight {
-                    MiniMoon()
-                        .frame(width: 26, height: 26)
-                        .padding(.top, 12)
-                        .padding(.trailing, 110)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                        .opacity(0.9)
-                        .blendMode(.screen)
-                }
-
-                Rectangle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.black.opacity(isDaylight ? 0.03 : 0.08),
-                                Color.black.opacity(isDaylight ? 0.08 : 0.12)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .blendMode(isDaylight ? .multiply : .normal)
-
-                // no noise overlay
-            }
-            .frame(width: geo.size.width, height: geo.size.height)
-            .clipped()
+            // no noise overlay
         }
-        .onAppear {
-            guard !reduceMotion, isDaylight, isActive else { return }
-            withAnimation(.easeInOut(duration: 14).repeatForever(autoreverses: true)) {
-                drift = 0.08
-            }
-        }
-        .onChange(of: isActive) { _, active in
-            if !active {
-                drift = 0
-            } else if isDaylight && !reduceMotion {
-                withAnimation(.easeInOut(duration: 14).repeatForever(autoreverses: true)) {
-                    drift = 0.08
-                }
-            }
-        }
+        .frame(width: size.width, height: size.height)
+        .clipped()
     }
 
     private var depthColors: [Color] {

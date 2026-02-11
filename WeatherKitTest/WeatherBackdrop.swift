@@ -6,7 +6,7 @@ import WeatherKit
 struct WeatherBackdropView: View {
     let weather: CurrentWeather
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var drift: CGFloat = 0
+    @EnvironmentObject private var appVisibility: AppVisibility
 
     private var styleKey: String {
         let condition = weather.condition.description.lowercased()
@@ -15,6 +15,23 @@ struct WeatherBackdropView: View {
     }
 
     var body: some View {
+        let shouldAnimate = appVisibility.effectsActive && !reduceMotion
+        Group {
+            if shouldAnimate {
+                TimelineView(.animation) { timeline in
+                    let t = timeline.date.timeIntervalSinceReferenceDate
+                    let drift = CGFloat(sin(t * 0.12)) * 0.08
+                    backdrop(drift: drift)
+                }
+            } else {
+                backdrop(drift: 0)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private func backdrop(drift: CGFloat) -> some View {
         ZStack {
             // Base gradient (animated subtly) based on time-of-day + conditions
             LinearGradient(
@@ -35,8 +52,10 @@ struct WeatherBackdropView: View {
             .animation(reduceMotion ? nil : .easeInOut(duration: 1.0), value: styleKey)
 
             // Atmospheric effects (always behind the main content)
-            weatherEffects
-                .allowsHitTesting(false)
+            if appVisibility.effectsActive {
+                weatherEffects
+                    .allowsHitTesting(false)
+            }
 
             // Subtle vignette for contrast + readability (keeps accessibility strong)
             Rectangle()
@@ -52,14 +71,6 @@ struct WeatherBackdropView: View {
                 )
                 .blendMode(.multiply)
                 .allowsHitTesting(false)
-        }
-        .ignoresSafeArea()
-        .onAppear {
-            guard !reduceMotion else { return }
-            // Gentle parallax drift so the background feels alive without being distracting.
-            withAnimation(.easeInOut(duration: 18).repeatForever(autoreverses: true)) {
-                drift = 0.08
-            }
         }
     }
 

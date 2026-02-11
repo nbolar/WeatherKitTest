@@ -23,9 +23,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     var popover: NSPopover?
     var weatherViewModel: WeatherViewModel?
+    private let appVisibility = AppVisibility.shared
+    private var appActiveObservers: [NSObjectProtocol] = []
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         UpdateManager.shared.start()
+
+        // Drive animation gating (and other UI work) off app focus + popover presentation.
+        // This is important for a menu bar popover app because the SwiftUI view may stay alive
+        // even when the popover is closed, which would otherwise keep animations/timers running.
+        let nc = NotificationCenter.default
+        appActiveObservers.append(
+            nc.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.appVisibility.isAppActive = true
+            }
+        )
+        appActiveObservers.append(
+            nc.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.appVisibility.isAppActive = false
+            }
+        )
 
         // Create status bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -50,7 +67,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover = NSPopover()
         popover?.contentSize = NSSize(width: 500, height: 700)
         popover?.behavior = .transient
-        popover?.contentViewController = NSHostingController(rootView: ContentView(viewModel: weatherViewModel!))
+        popover?.delegate = self
+        popover?.contentViewController = NSHostingController(
+            rootView: ContentView(viewModel: weatherViewModel!)
+                .environmentObject(appVisibility)
+        )
         
         weatherViewModel?.fetchCurrentLocationWeather()
     }
@@ -58,8 +79,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func togglePopover() {
         if let button = statusItem?.button {
             if popover?.isShown == true {
+                appVisibility.isPopoverVisible = false
                 popover?.performClose(nil)
             } else {
+                appVisibility.isPopoverVisible = true
                 popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
                 popover?.contentViewController?.view.window?.makeKey()
             }
@@ -85,6 +108,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             button.imagePosition = .imageLeading
             button.title = " \(temp)°"
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        let nc = NotificationCenter.default
+        for token in appActiveObservers {
+            nc.removeObserver(token)
+        }
+        appActiveObservers.removeAll()
+    }
+}
+
+extension AppDelegate: NSPopoverDelegate {
+    func popoverDidShow(_ notification: Notification) {
+        appVisibility.isPopoverVisible = true
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        appVisibility.isPopoverVisible = false
     }
 }
 

@@ -266,6 +266,55 @@ jobs:
           APP_PATH="$DERIVED_DATA/Build/Products/Release/$APP_NAME.app"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$DIST_DIR/$APP_NAME.zip"
 
+      - name: Create release notes (Sparkle)
+        run: |
+          python3 - <<'PY'
+          import html
+          import json
+          import os
+          from datetime import datetime, timezone
+          
+          dist_dir = os.environ["DIST_DIR"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          event_path = os.environ["GITHUB_EVENT_PATH"]
+          
+          with open(event_path, "r", encoding="utf-8") as f:
+            event = json.load(f)
+          
+          release = event.get("release") or {}
+          title = release.get("name") or tag or "Release Notes"
+          body = release.get("body") or ""
+          
+          # Keep it simple and safe: render the release body as text in <pre>.
+          # Users can still include links manually (they will show as text).
+          body_escaped = html.escape(body)
+          now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+          
+          out_path = os.path.join(dist_dir, "release-notes.html")
+          os.makedirs(dist_dir, exist_ok=True)
+          with open(out_path, "w", encoding="utf-8") as out:
+            out.write(
+              "<!doctype html>"
+              "<html><head>"
+              "<meta charset='utf-8'/>"
+              "<meta name='viewport' content='width=device-width, initial-scale=1'/>"
+              f"<title>{html.escape(title)}</title>"
+              "<style>"
+              "body{font-family:-apple-system,system-ui,Segoe UI,Helvetica,Arial,sans-serif;margin:24px;line-height:1.45;}"
+              "h1{font-size:18px;margin:0 0 6px 0;}"
+              "p.meta{color:#666;font-size:12px;margin:0 0 16px 0;}"
+              "pre{white-space:pre-wrap;background:#f6f6f6;border:1px solid #e6e6e6;border-radius:10px;padding:12px;}"
+              "</style>"
+              "</head><body>"
+              f"<h1>{html.escape(title)}</h1>"
+              f"<p class='meta'>{html.escape(repo)} {html.escape(tag)} • {now}</p>"
+              f"<pre>{body_escaped}</pre>"
+              "</body></html>"
+            )
+          print(f"Wrote {out_path}")
+          PY
+
       - name: Write Sparkle private key
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -281,9 +330,47 @@ jobs:
             --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/" \
             "."
 
+      - name: Add release notes link to appcast
+        run: |
+          python3 - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          
+          dist_dir = os.environ["DIST_DIR"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          tag = os.environ.get("GITHUB_REF_NAME", "")
+          
+          appcast_path = os.path.join(dist_dir, "appcast.xml")
+          notes_url = f"https://github.com/{repo}/releases/download/{tag}/release-notes.html"
+          
+          ns = {"sparkle": "http://www.andymatuschak.org/xml-namespaces/sparkle"}
+          ET.register_namespace("sparkle", ns["sparkle"])
+          
+          tree = ET.parse(appcast_path)
+          root = tree.getroot()
+          
+          channel = root.find("channel")
+          if channel is None:
+            raise SystemExit("Missing <channel> in appcast")
+          
+          item = channel.find("item")
+          if item is None:
+            raise SystemExit("Missing <item> in appcast")
+          
+          tag_name = "{%s}releaseNotesLink" % ns["sparkle"]
+          existing = item.find(tag_name)
+          if existing is None:
+            existing = ET.SubElement(item, tag_name)
+          existing.text = notes_url
+          
+          tree.write(appcast_path, encoding="utf-8", xml_declaration=True)
+          print(f"Updated appcast releaseNotesLink -> {notes_url}")
+          PY
+
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
             ${{ env.DIST_DIR }}/${{ env.APP_NAME }}.zip
             ${{ env.DIST_DIR }}/appcast.xml
+            ${{ env.DIST_DIR }}/release-notes.html

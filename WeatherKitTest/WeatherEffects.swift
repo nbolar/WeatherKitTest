@@ -2,6 +2,7 @@ import SwiftUI// MARK: - Weather Effects\n
 
 struct StarsEffect: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @EnvironmentObject private var appVisibility: AppVisibility
 
     private struct Star: Identifiable {
         let id: Int
@@ -16,37 +17,50 @@ struct StarsEffect: View {
     @State private var stars: [Star] = []
 
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            let drift = driftOffset(time: time)
-            ZStack {
-                ForEach(stars) { star in
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: star.size, height: star.size)
-                        .opacity(reduceMotion ? star.baseOpacity : twinkleOpacity(for: star, time: time))
-                        .blur(radius: star.size > 2.2 ? 0.35 : 0.2)
-                        .offset(x: star.x + drift.width, y: star.y + drift.height)
+        let shouldAnimate = appVisibility.effectsActive && !reduceMotion
+        Group {
+            if shouldAnimate {
+                TimelineView(.animation) { timeline in
+                    starsLayer(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
                 }
+            } else {
+                // Static stars when the app is unfocused/hidden or Reduce Motion is enabled.
+                starsLayer(time: 0, animate: false)
             }
-            .blendMode(.screen)
-            .allowsHitTesting(false)
         }
-        .onAppear {
-            if stars.isEmpty {
-                // Concentrate stars toward the upper half like the system Weather backgrounds.
-                stars = (0..<140).map { i in
-                    Star(
-                        id: i,
-                        x: CGFloat.random(in: -260...260),
-                        y: CGFloat.random(in: -420...50),
-                        size: CGFloat.random(in: 1.0...2.8),
-                        baseOpacity: Double.random(in: 0.28...0.65),
-                        twinkleSpeed: Double.random(in: 1.0...3.2),
-                        delay: Double.random(in: 0...12)
-                    )
-                }
+        .onAppear(perform: ensureStars)
+    }
+
+    @ViewBuilder
+    private func starsLayer(time: TimeInterval, animate: Bool) -> some View {
+        let drift = animate ? driftOffset(time: time) : .zero
+        ZStack {
+            ForEach(stars) { star in
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: star.size, height: star.size)
+                    .opacity(animate ? twinkleOpacity(for: star, time: time) : star.baseOpacity)
+                    .blur(radius: star.size > 2.2 ? 0.35 : 0.2)
+                    .offset(x: star.x + drift.width, y: star.y + drift.height)
             }
+        }
+        .blendMode(.screen)
+        .allowsHitTesting(false)
+    }
+
+    private func ensureStars() {
+        guard stars.isEmpty else { return }
+        // Concentrate stars toward the upper half like the system Weather backgrounds.
+        stars = (0..<140).map { i in
+            Star(
+                id: i,
+                x: CGFloat.random(in: -260...260),
+                y: CGFloat.random(in: -420...50),
+                size: CGFloat.random(in: 1.0...2.8),
+                baseOpacity: Double.random(in: 0.28...0.65),
+                twinkleSpeed: Double.random(in: 1.0...3.2),
+                delay: Double.random(in: 0...12)
+            )
         }
     }
     
@@ -674,16 +688,29 @@ private struct EnhancedDriftUpModifier: ViewModifier {
 
 struct MoonRaysEffect: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @EnvironmentObject private var appVisibility: AppVisibility
     @State private var rotation: Double = 0
     @State private var shimmer: Double = 0
     @State private var pulsePhase: Double = 0
     @State private var secondaryRotation: Double = 0
 
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            let drift = reduceMotion ? CGSize.zero : moonDriftOffset(time: time)
-            ZStack {
+        let shouldAnimate = appVisibility.effectsActive && !reduceMotion
+        Group {
+            if shouldAnimate {
+                TimelineView(.animation) { timeline in
+                    moonBody(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
+                }
+            } else {
+                moonBody(time: 0, animate: false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func moonBody(time: TimeInterval, animate: Bool) -> some View {
+        let drift = animate ? moonDriftOffset(time: time) : .zero
+        ZStack {
                 // Moon core with soft silvery glow (reduced size)
                 Circle()
                     .fill(
@@ -902,31 +929,31 @@ struct MoonRaysEffect: View {
             }
             .offset(drift)
             .allowsHitTesting(false)
-        }
         .onAppear {
-            guard !reduceMotion else { return }
-            
+            guard appVisibility.effectsActive, !reduceMotion else { return }
+
             // Slower rotation for mysterious moon effect
             withAnimation(.linear(duration: 280).repeatForever(autoreverses: false)) {
                 rotation = 360
             }
-            
+
             // Counter-rotation for depth effect
             withAnimation(.linear(duration: 380).repeatForever(autoreverses: false)) {
                 secondaryRotation = -360
             }
-            
+
             // Gentle pulsing shimmer
             withAnimation(.easeInOut(duration: 7.0).repeatForever(autoreverses: true)) {
                 shimmer = 1
             }
-            
+
             // Subtle pulse for moon core
             withAnimation(.easeInOut(duration: 5.2).repeatForever(autoreverses: true)) {
                 pulsePhase = 1
             }
         }
     }
+
 
     private func moonDriftOffset(time: TimeInterval) -> CGSize {
         // Dramatic drift for a visibly moving moon.
@@ -935,6 +962,7 @@ struct MoonRaysEffect: View {
         return CGSize(width: x, height: y)
     }
 }
+
 
 struct MoonlightMotesEffect: View {
     @State private var motes: [(id: Int, x: CGFloat, y: CGFloat, size: CGFloat, speed: Double, delay: Double, horizontalDrift: CGFloat)] = []
