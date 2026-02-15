@@ -1,8 +1,16 @@
-import SwiftUI// MARK: - Weather Effects\n
+import SwiftUI
+
+private func effectCount(_ base: Int, energySaver: Bool, factor: Double = 0.35) -> Int {
+    guard energySaver else { return base }
+    return max(1, Int((Double(base) * factor).rounded()))
+}
+
+// MARK: - Weather Effects
 
 struct StarsEffect: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var appVisibility: AppVisibility
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
 
     private struct Star: Identifiable {
         let id: Int
@@ -17,11 +25,17 @@ struct StarsEffect: View {
     @State private var stars: [Star] = []
 
     var body: some View {
-        let shouldAnimate = appVisibility.effectsActive && !reduceMotion
+        let shouldAnimate = appVisibility.effectsActive && !reduceMotion && !energySaverMode
         Group {
             if shouldAnimate {
-                TimelineView(.animation) { timeline in
-                    starsLayer(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
+                if energySaverMode {
+                    TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { timeline in
+                        starsLayer(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
+                    }
+                } else {
+                    TimelineView(.animation) { timeline in
+                        starsLayer(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
+                    }
                 }
             } else {
                 // Static stars when the app is unfocused/hidden or Reduce Motion is enabled.
@@ -51,7 +65,8 @@ struct StarsEffect: View {
     private func ensureStars() {
         guard stars.isEmpty else { return }
         // Concentrate stars toward the upper half like the system Weather backgrounds.
-        stars = (0..<140).map { i in
+        let total = effectCount(140, energySaver: energySaverMode, factor: 0.32)
+        stars = (0..<total).map { i in
             Star(
                 id: i,
                 x: CGFloat.random(in: -260...260),
@@ -85,6 +100,7 @@ struct StarsEffect: View {
 
 struct NightGlowEffect: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
     @State private var pulse: CGFloat = 0.35
 
     var body: some View {
@@ -107,7 +123,7 @@ struct NightGlowEffect: View {
             .blur(radius: 40)
             .allowsHitTesting(false)
             .onAppear {
-                guard !reduceMotion else { return }
+                guard !reduceMotion, !energySaverMode else { return }
                 withAnimation(.easeInOut(duration: 6).repeatForever(autoreverses: true)) {
                     pulse = 0.55
                 }
@@ -117,6 +133,7 @@ struct NightGlowEffect: View {
 
 struct ShootingStarsEffect: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
     @State private var shootingStars: [ShootingStar] = []
     
     fileprivate struct ShootingStar: Identifiable {
@@ -140,7 +157,7 @@ struct ShootingStarsEffect: View {
         }
         .allowsHitTesting(false)
         .onAppear {
-            guard !reduceMotion else { return }
+            guard !reduceMotion, !energySaverMode else { return }
             scheduleShootingStar()
         }
     }
@@ -148,8 +165,8 @@ struct ShootingStarsEffect: View {
     private func scheduleShootingStar() {
         guard !reduceMotion else { return }
         
-        // Random delay between shooting stars (5-15 seconds)
-        let delay = Double.random(in: 5...15)
+        // Random delay between shooting stars
+        let delay = energySaverMode ? Double.random(in: 9...22) : Double.random(in: 5...15)
         
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             createShootingStar()
@@ -689,17 +706,24 @@ private struct EnhancedDriftUpModifier: ViewModifier {
 struct MoonRaysEffect: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var appVisibility: AppVisibility
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
     @State private var rotation: Double = 0
     @State private var shimmer: Double = 0
     @State private var pulsePhase: Double = 0
     @State private var secondaryRotation: Double = 0
 
     var body: some View {
-        let shouldAnimate = appVisibility.effectsActive && !reduceMotion
+        let shouldAnimate = appVisibility.effectsActive && !reduceMotion && !energySaverMode
         Group {
             if shouldAnimate {
-                TimelineView(.animation) { timeline in
-                    moonBody(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
+                if energySaverMode {
+                    TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { timeline in
+                        moonBody(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
+                    }
+                } else {
+                    TimelineView(.animation) { timeline in
+                        moonBody(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
+                    }
                 }
             } else {
                 moonBody(time: 0, animate: false)
@@ -930,7 +954,7 @@ struct MoonRaysEffect: View {
             .offset(drift)
             .allowsHitTesting(false)
         .onAppear {
-            guard appVisibility.effectsActive, !reduceMotion else { return }
+            guard appVisibility.effectsActive, !reduceMotion, !energySaverMode else { return }
 
             // Slower rotation for mysterious moon effect
             withAnimation(.linear(duration: 280).repeatForever(autoreverses: false)) {
@@ -965,6 +989,7 @@ struct MoonRaysEffect: View {
 
 
 struct MoonlightMotesEffect: View {
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
     @State private var motes: [(id: Int, x: CGFloat, y: CGFloat, size: CGFloat, speed: Double, delay: Double, horizontalDrift: CGFloat)] = []
 
     var body: some View {
@@ -995,7 +1020,8 @@ struct MoonlightMotesEffect: View {
         }
         .allowsHitTesting(false)
         .onAppear {
-            motes = (0..<60).map { i in
+            let total = effectCount(60, energySaver: energySaverMode, factor: 0.30)
+            motes = (0..<total).map { i in
                 (
                     id: i,
                     x: CGFloat.random(in: -280...280),
@@ -1056,6 +1082,7 @@ private struct MoonlightDriftModifier: ViewModifier {
 }
 
 struct RainEffect: View {
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
     @State private var drops: [(id: Int, x: CGFloat, delay: Double, speed: Double)] = []
     
     var body: some View {
@@ -1067,11 +1094,14 @@ struct RainEffect: View {
             }
             
             // Subtle water ripple effect at bottom
-            WaterRippleEffect()
+            if !energySaverMode {
+                WaterRippleEffect()
+            }
         }
         .allowsHitTesting(false)
         .onAppear {
-            drops = (0..<50).map { i in
+            let total = effectCount(50, energySaver: energySaverMode, factor: 0.30)
+            drops = (0..<total).map { i in
                 (
                     id: i,
                     x: CGFloat.random(in: -300...300),
@@ -1139,6 +1169,7 @@ struct WaterRippleEffect: View {
 }
 
 struct DrizzleEffect: View {
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
     @State private var drops: [(id: Int, x: CGFloat, delay: Double, speed: Double)] = []
     
     var body: some View {
@@ -1154,8 +1185,9 @@ struct DrizzleEffect: View {
         }
         .allowsHitTesting(false)
         .onAppear {
-            // Fewer drops than rain (30 vs 50) for lighter effect
-            drops = (0..<30).map { i in
+            // Fewer drops than rain for lighter effect
+            let total = effectCount(30, energySaver: energySaverMode, factor: 0.32)
+            drops = (0..<total).map { i in
                 (
                     id: i,
                     x: CGFloat.random(in: -300...300),
@@ -1255,6 +1287,7 @@ struct DrizzleMistEffect: View {
 }
 
 struct SnowEffect: View {
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
     @State private var snowflakes: [(id: Int, x: CGFloat, size: CGFloat, delay: Double, speed: Double, drift: CGFloat)] = []
     
     var body: some View {
@@ -1271,7 +1304,8 @@ struct SnowEffect: View {
         }
         .allowsHitTesting(false)
         .onAppear {
-            snowflakes = (0..<120).map { i in
+            let total = effectCount(120, energySaver: energySaverMode, factor: 0.28)
+            snowflakes = (0..<total).map { i in
                 (
                     id: i,
                     x: CGFloat.random(in: -300...300),
@@ -1355,6 +1389,7 @@ struct Snowflake: View {
 }
 
 struct CloudEffect: View {
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
     @State private var clouds: [(id: Int, yPos: CGFloat, width: CGFloat, height: CGFloat, delay: Double, speed: Double)] = []
     
     var body: some View {
@@ -1371,7 +1406,8 @@ struct CloudEffect: View {
         }
         .allowsHitTesting(false)
         .onAppear {
-            clouds = (0..<8).map { i in
+            let total = effectCount(8, energySaver: energySaverMode, factor: 0.38)
+            clouds = (0..<total).map { i in
                 (
                     id: i,
                     yPos: CGFloat.random(in: -250...150),

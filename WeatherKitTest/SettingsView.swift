@@ -23,6 +23,7 @@ struct InAppSettingsView: View {
 
     @AppStorage("refreshIntervalMinutes") private var refreshIntervalMinutes: Int = 30
     @AppStorage("useCelsius") private var useCelsius: Bool = false
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
     private let options = [5, 10, 15, 30, 60, 120, 180]
     
     @StateObject private var launchManager: LaunchAtLoginManager
@@ -145,6 +146,16 @@ struct InAppSettingsView: View {
                                 }
                                 .toggleStyle(.switch)
                             }
+                        }
+
+                        SettingsRowDivider()
+                        SettingsRow(title: "Energy Saver", subtitle: "Aggressively reduces weather animation and visual effects.") {
+                            Toggle(isOn: $energySaverMode) {
+                                Text("Lower energy use")
+                                    .font(.subheadline.weight(.light))
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+                            .toggleStyle(.switch)
                         }
                 }
                 SettingsRowDivider()

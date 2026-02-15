@@ -152,6 +152,7 @@ struct SavedLocationsList: View {
     @State private var currentTime = Date()
     private let timeTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
     @EnvironmentObject private var appVisibility: AppVisibility
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -162,7 +163,7 @@ struct SavedLocationsList: View {
                         isSelected: selectedIndex == index,
                         cachedWeather: cachedWeather[location.id],
                         currentTime: currentTime,
-                        isActive: isExpanded && appVisibility.effectsActive,
+                        isActive: isExpanded && appVisibility.effectsActive && (!energySaverMode || selectedIndex == index),
                         onSelect: { onSelect(index) },
                         onRemove: { onRemove(location) },
                         isReorderMode: isReorderMode,
@@ -510,16 +511,25 @@ private struct MiniWeatherBackdrop: View {
     let isDaylight: Bool
     let isActive: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
 
     var body: some View {
         GeometryReader { geo in
-            let shouldAnimate = isDaylight && isActive && !reduceMotion
+            let shouldAnimate = isDaylight && isActive && !reduceMotion && !energySaverMode
             Group {
                 if shouldAnimate {
-                    TimelineView(.animation) { timeline in
-                        let t = timeline.date.timeIntervalSinceReferenceDate
-                        let drift = CGFloat(sin(t * 0.12)) * 0.08
-                        backdropLayer(drift: drift, size: geo.size)
+                    if energySaverMode {
+                        TimelineView(.periodic(from: .now, by: 1.0 / 24.0)) { timeline in
+                            let t = timeline.date.timeIntervalSinceReferenceDate
+                            let drift = CGFloat(sin(t * 0.12)) * 0.08
+                            backdropLayer(drift: drift, size: geo.size)
+                        }
+                    } else {
+                        TimelineView(.animation) { timeline in
+                            let t = timeline.date.timeIntervalSinceReferenceDate
+                            let drift = CGFloat(sin(t * 0.12)) * 0.08
+                            backdropLayer(drift: drift, size: geo.size)
+                        }
                     }
                 } else {
                     backdropLayer(drift: 0, size: geo.size)
@@ -664,35 +674,44 @@ private struct MiniWeatherBackdrop: View {
         let isFoggy = conditionText.contains("fog") || conditionText.contains("haze")
         let isWet = conditionText.contains("rain") || conditionText.contains("drizzle") || conditionText.contains("storm") || conditionText.contains("thunder") || conditionText.contains("snow")
 
-        if !isDaylight, isClear {
-            StarsEffect()
-            ShootingStarsEffect()
-            MoonRaysEffect()
-        } else if !isDaylight {
-            StarsEffect()
-            if isCloudy || isFoggy || isWet {
-                NightGlowEffect()
-                    .opacity(0.45)
+        if energySaverMode {
+            if !isDaylight {
+                StarsEffect()
+                if isClear {
+                    MoonRaysEffect()
+                }
             }
-        }
+        } else {
+            if !isDaylight, isClear {
+                StarsEffect()
+                ShootingStarsEffect()
+                MoonRaysEffect()
+            } else if !isDaylight {
+                StarsEffect()
+                if isCloudy || isFoggy || isWet {
+                    NightGlowEffect()
+                        .opacity(0.45)
+                }
+            }
 
-        if conditionText.contains("storm") || conditionText.contains("thunder") {
-            LightningEffect(intensity: 0.7)
-            RainEffect()
-        } else if conditionText.contains("drizzle") {
-            DrizzleEffect()
-        } else if conditionText.contains("rain") {
-            RainEffect()
-        } else if conditionText.contains("snow") {
-            SnowEffect()
-        } else if conditionText.contains("fog") || conditionText.contains("haze") {
-            FogEffect()
-        } else if conditionText.contains("cloud") {
-            CloudEffect()
-        } else if isClear && isDaylight {
-            ZStack {
-                SunRaysEffect()
-                LensFlareEffect(intensity: 0.7)
+            if conditionText.contains("storm") || conditionText.contains("thunder") {
+                LightningEffect(intensity: 0.7)
+                RainEffect()
+            } else if conditionText.contains("drizzle") {
+                DrizzleEffect()
+            } else if conditionText.contains("rain") {
+                RainEffect()
+            } else if conditionText.contains("snow") {
+                SnowEffect()
+            } else if conditionText.contains("fog") || conditionText.contains("haze") {
+                FogEffect()
+            } else if conditionText.contains("cloud") {
+                CloudEffect()
+            } else if isClear && isDaylight {
+                ZStack {
+                    SunRaysEffect()
+                    LensFlareEffect(intensity: 0.7)
+                }
             }
         }
     }

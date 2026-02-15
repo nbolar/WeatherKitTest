@@ -459,8 +459,10 @@ struct ContentView: View {
             }
         }
         .scrollDisabledWhenChartsVisible(selectedTab == 1)
+        .coordinateSpace(name: "weatherMainScroll")
         .scrollContentBackground(.hidden)
         .background(Color.clear)
+        .softScrollEdges()
     }
     
     @ViewBuilder
@@ -494,6 +496,25 @@ struct ContentView: View {
         }
     }
     
+}
+
+private extension View {
+    func softScrollEdges() -> some View {
+        self
+            .compositingGroup()
+            .mask(
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0.0),
+                        .init(color: .black, location: 0.03),
+                        .init(color: .black, location: 0.97),
+                        .init(color: .clear, location: 1.0)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+    }
 }
 
 // MARK: - Preview

@@ -21,7 +21,7 @@ struct CurrentWeatherView: View {
     @AppStorage("useCelsius") private var useCelsius: Bool = false
 
     var body: some View {
-        VStack(spacing: 12) {
+        LazyVStack(spacing: 12) {
             if !alerts.isEmpty {
                 ForEach(Array(alerts.enumerated()), id: \.element.summary) { index, alert in
                     WeatherAlertBanner(alert: alert, alertIndex: index, totalAlerts: alerts.count)
@@ -40,21 +40,15 @@ struct CurrentWeatherView: View {
             )
 
             mainTemperatureCard
-
             minutePrecipitationCard(minuteForecast)
-
             compactMetricsStack
-
             airQualityCard(airQuality)
-
-            uvIndexCard
-
-            if dailyForecast != nil {
-                sunMoonCard
-            }
+            uvIndexCard()
+            if dailyForecast != nil { sunMoonCard }
         }
         .padding(.horizontal)
-        .padding(.top, 4)
+        .padding(.top, 8)
+        .padding(.bottom, 10)
     }
 
     // MARK: - Main Temperature Card
@@ -129,7 +123,7 @@ struct CurrentWeatherView: View {
         }
     }
 
-    private func minutePrecipContent(minutes: [MinuteWeather], maxIntensity: Double) -> some View {
+    private func minutePrecipContent(minutes: [MinuteWeather], maxIntensity: Double, showHeader: Bool = true) -> some View {
         let peak = minutes.max(by: { $0.precipitationIntensity.value < $1.precipitationIntensity.value })
         let statusText: String = {
             if let peak {
@@ -139,20 +133,22 @@ struct CurrentWeatherView: View {
         }()
 
         return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Next Hour Precipitation")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                Spacer()
-                Text(String(format: "%.2f mm/hr", maxIntensity))
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.75))
-                    .padding(.vertical, 3)
-                    .padding(.horizontal, 8)
-                    .background(
-                        Capsule()
-                            .fill(Color.cyan.opacity(0.25))
-                    )
+            if showHeader {
+                HStack {
+                    Text("Next Hour Precipitation")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Spacer()
+                    Text(String(format: "%.2f mm/hr", maxIntensity))
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.75))
+                        .padding(.vertical, 3)
+                        .padding(.horizontal, 8)
+                        .background(
+                            Capsule()
+                                .fill(Color.cyan.opacity(0.25))
+                        )
+                }
             }
 
             Text(statusText)
@@ -222,6 +218,7 @@ struct CurrentWeatherView: View {
     // MARK: - Sun & Moon Card
     private var sunMoonCard: some View {
         VStack(spacing: 12) {
+
             if let sun = dailyForecast?.sun {
                 HStack(spacing: 12) {
                     if let sunrise = sun.sunrise {
@@ -285,27 +282,29 @@ struct CurrentWeatherView: View {
     }
 
     // MARK: - Air Quality Card
-    private func airQualityCard(_ air: AirQualitySnapshot?) -> some View {
+    private func airQualityCard(_ air: AirQualitySnapshot?, showHeader: Bool = true) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             let aqiValue = air?.usAQI ?? air?.europeanAQI
             let scale = air?.scale ?? (air?.usAQI != nil ? .us : (air?.europeanAQI != nil ? .eu : nil))
 
-            HStack {
-                Text("Air Quality")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                Spacer()
-                if let aqi = aqiValue {
-                    let label = scale == .eu ? "EU AQI" : "US AQI"
-                    Text("\(label) \(Int(aqi.rounded()))")
-                        .font(.subheadline)
-                        .foregroundColor(.white.opacity(0.9))
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 8)
-                        .background(
-                            Capsule()
-                                .fill(aqiColor(aqi, scale: scale ?? .us).opacity(0.35))
-                        )
+            if showHeader {
+                HStack {
+                    Text("Air Quality")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Spacer()
+                    if let aqi = aqiValue {
+                        let label = scale == .eu ? "EU AQI" : "US AQI"
+                        Text("\(label) \(Int(aqi.rounded()))")
+                            .font(.subheadline)
+                            .foregroundColor(.white.opacity(0.9))
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 8)
+                            .background(
+                                Capsule()
+                                    .fill(aqiColor(aqi, scale: scale ?? .us).opacity(0.35))
+                            )
+                    }
                 }
             }
 
@@ -341,7 +340,7 @@ struct CurrentWeatherView: View {
     }
 
     // MARK: - UV Index Card
-    private var uvIndexCard: some View {
+    private func uvIndexCard(showHeader: Bool = true) -> some View {
         let currentUV = weather.uvIndex.value
         let category = weather.uvIndex.category.description
         let peak = peakUVHour()
@@ -350,20 +349,22 @@ struct CurrentWeatherView: View {
         let hazeValue = airQuality?.aerosolOpticalDepth
 
         return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("UV Index")
-                    .font(.headline)
-                    .foregroundColor(.white)
-                Spacer()
-                Text("\(Int(currentUV))")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white)
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 8)
-                    .background(
-                        Capsule()
-                            .fill(uvIndexColor(for: currentUV).opacity(0.30))
-                    )
+            if showHeader {
+                HStack {
+                    Text("UV Index")
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    Spacer()
+                    Text("\(Int(currentUV))")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(.white)
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 8)
+                        .background(
+                            Capsule()
+                                .fill(uvIndexColor(for: currentUV).opacity(0.30))
+                        )
+                }
             }
 
             Text(category)

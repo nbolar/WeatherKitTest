@@ -7,6 +7,7 @@ struct WeatherBackdropView: View {
     let weather: CurrentWeather
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var appVisibility: AppVisibility
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
 
     private var styleKey: String {
         let condition = weather.condition.description.lowercased()
@@ -15,13 +16,21 @@ struct WeatherBackdropView: View {
     }
 
     var body: some View {
-        let shouldAnimate = appVisibility.effectsActive && !reduceMotion
+        let shouldAnimate = appVisibility.effectsActive && !reduceMotion && !energySaverMode
         Group {
             if shouldAnimate {
-                TimelineView(.animation) { timeline in
-                    let t = timeline.date.timeIntervalSinceReferenceDate
-                    let drift = CGFloat(sin(t * 0.12)) * 0.08
-                    backdrop(drift: drift)
+                if energySaverMode {
+                    TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { timeline in
+                        let t = timeline.date.timeIntervalSinceReferenceDate
+                        let drift = CGFloat(sin(t * 0.12)) * 0.08
+                        backdrop(drift: drift)
+                    }
+                } else {
+                    TimelineView(.animation) { timeline in
+                        let t = timeline.date.timeIntervalSinceReferenceDate
+                        let drift = CGFloat(sin(t * 0.12)) * 0.08
+                        backdrop(drift: drift)
+                    }
                 }
             } else {
                 backdrop(drift: 0)
@@ -181,38 +190,47 @@ struct WeatherBackdropView: View {
         let condition = weather.condition.description.lowercased()
         let isDay = weather.isDaylight
 
-        // Night gets stars + either moon (clear) or subtle glow (other conditions)
-        if !isDay {
-            StarsEffect()
-            ShootingStarsEffect()
-            // Show moon with rays on clear nights, otherwise just a subtle glow
-            if condition.contains("clear") || condition.contains("sunny") {
-                MoonRaysEffect()
-            } else {
-                NightGlowEffect()
+        if energySaverMode {
+            if !isDay {
+                StarsEffect()
+                if condition.contains("clear") || condition.contains("sunny") {
+                    MoonRaysEffect()
+                }
             }
-        }
+        } else {
+            // Night gets stars + either moon (clear) or subtle glow (other conditions)
+            if !isDay {
+                StarsEffect()
+                ShootingStarsEffect()
+                // Show moon with rays on clear nights, otherwise just a subtle glow
+                if condition.contains("clear") || condition.contains("sunny") {
+                    MoonRaysEffect()
+                } else {
+                    NightGlowEffect()
+                }
+            }
 
-        if condition.contains("storm") || condition.contains("thunder") {
-            // Lightning + optional rain gives the right drama.
-            LightningEffect(intensity: isDay ? 0.9 : 1.0)
-            RainEffect()
-        } else if condition.contains("drizzle") {
-            DrizzleEffect()
-        } else if condition.contains("rain") {
-            RainEffect()
-        } else if condition.contains("snow") {
-            SnowEffect()
-        } else if condition.contains("fog") || condition.contains("haze") {
-            FogEffect()
-        } else if condition.contains("cloud") {
-            CloudEffect()
-        } else if (condition.contains("clear") || condition.contains("sunny")) && isDay {
-            ZStack {
-                SunRaysEffect()
-                // Subtle lens flare artifacts for sunny days
-                LensFlareEffect(intensity: 0.9)
-                    .opacity(0.9)
+            if condition.contains("storm") || condition.contains("thunder") {
+                // Lightning + optional rain gives the right drama.
+                LightningEffect(intensity: isDay ? 0.9 : 1.0)
+                RainEffect()
+            } else if condition.contains("drizzle") {
+                DrizzleEffect()
+            } else if condition.contains("rain") {
+                RainEffect()
+            } else if condition.contains("snow") {
+                SnowEffect()
+            } else if condition.contains("fog") || condition.contains("haze") {
+                FogEffect()
+            } else if condition.contains("cloud") {
+                CloudEffect()
+            } else if (condition.contains("clear") || condition.contains("sunny")) && isDay {
+                ZStack {
+                    SunRaysEffect()
+                    // Subtle lens flare artifacts for sunny days
+                    LensFlareEffect(intensity: 0.9)
+                        .opacity(0.9)
+                }
             }
         }
     }
