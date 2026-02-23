@@ -286,8 +286,8 @@ jobs:
           title = release.get("name") or tag or "Release Notes"
           body = release.get("body") or ""
           
-          # Keep it simple and safe: render the release body as text in <pre>.
-          # Users can still include links manually (they will show as text).
+          # Keep it simple and safe: render the release body as escaped text.
+          # Use color-scheme aware styling so Sparkle's dark appearance stays readable.
           body_escaped = html.escape(body)
           now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
           
@@ -299,17 +299,24 @@ jobs:
               "<html><head>"
               "<meta charset='utf-8'/>"
               "<meta name='viewport' content='width=device-width, initial-scale=1'/>"
+              "<meta name='color-scheme' content='light dark'/>"
               f"<title>{html.escape(title)}</title>"
               "<style>"
-              "body{font-family:-apple-system,system-ui,Segoe UI,Helvetica,Arial,sans-serif;margin:24px;line-height:1.45;}"
+              ":root{color-scheme:light dark;}"
+              "body{font-family:-apple-system,system-ui,Segoe UI,Helvetica,Arial,sans-serif;margin:24px;line-height:1.45;color:#1f2328;background:#ffffff;}"
               "h1{font-size:18px;margin:0 0 6px 0;}"
-              "p.meta{color:#666;font-size:12px;margin:0 0 16px 0;}"
-              "pre{white-space:pre-wrap;background:#f6f6f6;border:1px solid #e6e6e6;border-radius:10px;padding:12px;}"
+              "p.meta{color:#59636e;font-size:12px;margin:0 0 16px 0;}"
+              "pre.notes{white-space:pre-wrap;word-break:break-word;color:inherit;background:#f3f4f6;border:1px solid #d8dee4;border-radius:10px;padding:12px;}"
+              "@media (prefers-color-scheme: dark){"
+              "body{color:#e6edf3;background:#0d1117;}"
+              "p.meta{color:#9aa4af;}"
+              "pre.notes{background:#161b22;border-color:#30363d;color:#e6edf3;}"
+              "}"
               "</style>"
               "</head><body>"
               f"<h1>{html.escape(title)}</h1>"
               f"<p class='meta'>{html.escape(repo)} {html.escape(tag)} • {now}</p>"
-              f"<pre>{body_escaped}</pre>"
+              f"<pre class='notes'>{body_escaped}</pre>"
               "</body></html>"
             )
           print(f"Wrote {out_path}")
