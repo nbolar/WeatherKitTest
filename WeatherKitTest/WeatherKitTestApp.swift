@@ -96,9 +96,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let temp : Int
             
             if useCelsius {
-                temp = Int(tempMeasurement.converted(to: .celsius).value)
+                temp = Int(tempMeasurement.converted(to: .celsius).value.rounded())
             } else {
-                temp = Int(tempMeasurement.converted(to: .fahrenheit).value)
+                temp = Int(tempMeasurement.converted(to: .fahrenheit).value.rounded())
             }
             
             let symbol = weather.symbolName

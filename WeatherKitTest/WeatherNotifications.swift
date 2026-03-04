@@ -10,6 +10,7 @@ final class WeatherNotificationManager {
     private let precipStorageKey = "lastPrecipNotification"
     private let precipStartKey = "lastPrecipStartTime"
     private let alertRetention: TimeInterval = 60 * 60 * 48
+    private let precipitationLeadTime: TimeInterval = 10 * 60
 
     private init() {}
 
@@ -78,24 +79,30 @@ final class WeatherNotificationManager {
         let precipType = classifyPrecipitationType(first, current: currentWeather)
         let maxIntensity = minutes.map { $0.precipitationIntensity.value }.max() ?? first.precipitationIntensity.value
         let intensityLabel = intensityDescription(maxIntensity, type: precipType)
+        let peakMinute = minutes.max(by: { $0.precipitationIntensity.value < $1.precipitationIntensity.value }) ?? first
+        let peakLabel = intensityDescription(peakMinute.precipitationIntensity.value, type: precipType)
         let formatter = DateFormatter()
         formatter.timeStyle = .short
         let startString = formatter.string(from: first.date)
+        let peakString = formatter.string(from: peakMinute.date)
 
         let content = UNMutableNotificationContent()
         content.title = "Precipitation expected"
         if let locationName { content.subtitle = locationName }
-        content.body = "\(intensityLabel) starting around \(startString)."
+        content.body = "\(intensityLabel) starting around \(startString). Likely heaviest around \(peakString) (\(peakLabel.lowercased()))."
         content.sound = .default
+
+        let nowDate = Date()
+        let fireDelay = max(1, first.date.timeIntervalSince(nowDate) - precipitationLeadTime)
 
         let request = UNNotificationRequest(
             identifier: "weather.precip.\(Int(startTime))",
             content: content,
-            trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: fireDelay, repeats: false)
         )
 
         try? await center.add(request)
-        defaults.set(now, forKey: precipStorageKey)
+        defaults.set(nowDate.timeIntervalSince1970, forKey: precipStorageKey)
         defaults.set(startTime, forKey: precipStartKey)
     }
 
