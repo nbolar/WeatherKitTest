@@ -272,6 +272,7 @@ jobs:
           import html
           import json
           import os
+          import re
           from datetime import datetime, timezone
           
           dist_dir = os.environ["DIST_DIR"]
@@ -286,10 +287,139 @@ jobs:
           title = release.get("name") or tag or "Release Notes"
           body = release.get("body") or ""
           
-          # Keep it simple and safe: render the release body as escaped text.
-          # Use color-scheme aware styling so Sparkle's dark appearance stays readable.
-          body_escaped = html.escape(body)
+          def render_inline(markdown_text: str) -> str:
+            placeholders = []
+
+            def stash(fragment: str) -> str:
+              token = f"SPARKLE_PLACEHOLDER_{len(placeholders)}"
+              placeholders.append((token, fragment))
+              return token
+
+            markdown_text = re.sub(
+              r"`([^`]+)`",
+              lambda match: stash(f"<code>{html.escape(match.group(1))}</code>"),
+              markdown_text,
+            )
+            markdown_text = re.sub(
+              r"\[([^\]]+)\]\(([^)]+)\)",
+              lambda match: stash(
+                f'<a href="{html.escape(match.group(2).strip(), quote=True)}">{html.escape(match.group(1))}</a>'
+              ),
+              markdown_text,
+            )
+            markdown_text = re.sub(
+              r"\*\*([^*]+)\*\*",
+              lambda match: stash(f"<strong>{html.escape(match.group(1))}</strong>"),
+              markdown_text,
+            )
+            markdown_text = re.sub(
+              r"(?<!\*)\*([^*]+)\*(?!\*)",
+              lambda match: stash(f"<em>{html.escape(match.group(1))}</em>"),
+              markdown_text,
+            )
+
+            rendered = html.escape(markdown_text)
+            for token, fragment in placeholders:
+              rendered = rendered.replace(token, fragment)
+            return rendered
+
+          def render_markdown(markdown_text: str) -> str:
+            html_parts = []
+            paragraph_lines = []
+            list_type = None
+            in_code_block = False
+            code_lines = []
+
+            def flush_paragraph() -> None:
+              if not paragraph_lines:
+                return
+              paragraph = " ".join(line.strip() for line in paragraph_lines)
+              html_parts.append(f"<p>{render_inline(paragraph)}</p>")
+              paragraph_lines.clear()
+
+            def flush_list() -> None:
+              nonlocal list_type
+              if list_type is not None:
+                html_parts.append(f"</{list_type}>")
+                list_type = None
+
+            def open_list(new_type: str) -> None:
+              nonlocal list_type
+              if list_type == new_type:
+                return
+              flush_list()
+              html_parts.append(f"<{new_type}>")
+              list_type = new_type
+
+            for raw_line in markdown_text.splitlines():
+              line = raw_line.rstrip()
+              stripped = line.strip()
+
+              if stripped.startswith("```"):
+                flush_paragraph()
+                flush_list()
+                if in_code_block:
+                  html_parts.append(
+                    "<pre><code>"
+                    + "\n".join(html.escape(code_line) for code_line in code_lines)
+                    + "</code></pre>"
+                  )
+                  code_lines.clear()
+                  in_code_block = False
+                else:
+                  in_code_block = True
+                continue
+
+              if in_code_block:
+                code_lines.append(line)
+                continue
+
+              if not stripped:
+                flush_paragraph()
+                flush_list()
+                continue
+
+              heading_match = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+              if heading_match:
+                flush_paragraph()
+                flush_list()
+                level = len(heading_match.group(1))
+                html_parts.append(f"<h{level}>{render_inline(heading_match.group(2).strip())}</h{level}>")
+                continue
+
+              unordered_match = re.match(r"^[-*]\s+(.*)$", stripped)
+              if unordered_match:
+                flush_paragraph()
+                open_list("ul")
+                html_parts.append(f"<li>{render_inline(unordered_match.group(1).strip())}</li>")
+                continue
+
+              ordered_match = re.match(r"^\d+\.\s+(.*)$", stripped)
+              if ordered_match:
+                flush_paragraph()
+                open_list("ol")
+                html_parts.append(f"<li>{render_inline(ordered_match.group(1).strip())}</li>")
+                continue
+
+              paragraph_lines.append(stripped)
+
+            if in_code_block:
+              html_parts.append(
+                "<pre><code>"
+                + "\n".join(html.escape(code_line) for code_line in code_lines)
+                + "</code></pre>"
+              )
+
+            flush_paragraph()
+            flush_list()
+
+            if not html_parts:
+              return "<p>No release notes were provided for this build.</p>"
+
+            return "\n".join(html_parts)
+
           now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+          rendered_body = render_markdown(body)
           
           out_path = os.path.join(dist_dir, "release-notes.html")
           os.makedirs(dist_dir, exist_ok=True)
@@ -305,18 +435,31 @@ jobs:
               ":root{color-scheme:light dark;}"
               "body{font-family:-apple-system,system-ui,Segoe UI,Helvetica,Arial,sans-serif;margin:24px;line-height:1.45;color:#1f2328;background:#ffffff;}"
               "h1{font-size:18px;margin:0 0 6px 0;}"
+              "h2{font-size:16px;margin:24px 0 10px 0;}"
+              "h3{font-size:14px;margin:20px 0 8px 0;}"
               "p.meta{color:#59636e;font-size:12px;margin:0 0 16px 0;}"
-              "pre.notes{white-space:pre-wrap;word-break:break-word;color:inherit;background:#f3f4f6;border:1px solid #d8dee4;border-radius:10px;padding:12px;}"
+              "article.notes{background:#f3f4f6;border:1px solid #d8dee4;border-radius:10px;padding:16px;}"
+              "article.notes p{margin:0 0 14px 0;}"
+              "article.notes ul,article.notes ol{margin:0 0 16px 22px;padding:0;}"
+              "article.notes li{margin:0 0 8px 0;}"
+              "article.notes code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.95em;background:rgba(175,184,193,0.2);padding:0.12em 0.36em;border-radius:6px;}"
+              "article.notes pre{overflow:auto;background:rgba(175,184,193,0.2);padding:12px;border-radius:8px;}"
+              "article.notes pre code{background:transparent;padding:0;}"
+              "article.notes a{color:#0969da;text-decoration:none;}"
+              "article.notes a:hover{text-decoration:underline;}"
               "@media (prefers-color-scheme: dark){"
               "body{color:#e6edf3;background:#0d1117;}"
               "p.meta{color:#9aa4af;}"
-              "pre.notes{background:#161b22;border-color:#30363d;color:#e6edf3;}"
+              "article.notes{background:#161b22;border-color:#30363d;color:#e6edf3;}"
+              "article.notes code{background:rgba(110,118,129,0.4);}"
+              "article.notes pre{background:rgba(110,118,129,0.25);}"
+              "article.notes a{color:#58a6ff;}"
               "}"
               "</style>"
               "</head><body>"
               f"<h1>{html.escape(title)}</h1>"
               f"<p class='meta'>{html.escape(repo)} {html.escape(tag)} • {now}</p>"
-              f"<pre class='notes'>{body_escaped}</pre>"
+              f"<article class='notes'>{rendered_body}</article>"
               "</body></html>"
             )
           print(f"Wrote {out_path}")
