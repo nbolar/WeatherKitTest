@@ -19,13 +19,23 @@ struct CurrentWeatherView: View {
     let aiSummaryLong: String?
 
     @AppStorage("useCelsius") private var useCelsius: Bool = false
+    @State private var expandedAlertKeys: Set<String> = []
 
     var body: some View {
         LazyVStack(spacing: 12) {
             if !alerts.isEmpty {
-                ForEach(Array(alerts.enumerated()), id: \.element.summary) { index, alert in
-                    WeatherAlertBanner(alert: alert, alertIndex: index, totalAlerts: alerts.count)
-                        .id("\(alert.summary)-\(index)")
+                ForEach(Array(alerts.enumerated()), id: \.offset) { index, alert in
+                    let alertTarget = alert.navigationTarget(at: index)
+                    WeatherAlertBanner(
+                        alert: alert,
+                        alertTarget: alertTarget,
+                        alertIndex: index,
+                        totalAlerts: alerts.count,
+                        isExpanded: expandedAlertKeys.contains(alertTarget.key)
+                    ) {
+                        toggleAlertExpansion(alertTarget.key)
+                    }
+                    .id(alertTarget.key)
                 }
             }
 
@@ -49,6 +59,37 @@ struct CurrentWeatherView: View {
         .padding(.horizontal)
         .padding(.top, 8)
         .padding(.bottom, 10)
+        .onAppear {
+            syncExpandedAlertKeys()
+        }
+        .onChange(of: alertNavigationToken) { _, _ in
+            syncExpandedAlertKeys()
+        }
+    }
+
+    private var alertNavigationToken: String {
+        Array(alerts.enumerated())
+            .map { index, alert in alert.navigationTarget(at: index).key }
+            .joined(separator: "|")
+    }
+
+    private func toggleAlertExpansion(_ alertKey: String) {
+        withAnimation(.smooth(duration: 0.35, extraBounce: 0)) {
+            if expandedAlertKeys.contains(alertKey) {
+                expandedAlertKeys.remove(alertKey)
+            } else {
+                expandedAlertKeys.insert(alertKey)
+            }
+        }
+    }
+
+    private func syncExpandedAlertKeys() {
+        let validKeys = Set(
+            Array(alerts.enumerated()).map { index, alert in
+                alert.navigationTarget(at: index).key
+            }
+        )
+        expandedAlertKeys = expandedAlertKeys.intersection(validKeys)
     }
 
     // MARK: - Main Temperature Card

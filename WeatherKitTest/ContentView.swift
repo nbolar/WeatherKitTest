@@ -370,7 +370,7 @@ struct ContentView: View {
     @ViewBuilder
     private var currentLocationButton: some View {
         Button(action: {
-            viewModel.fetchCurrentLocationWeather()
+            viewModel.fetchCurrentLocationWeather(userInitiated: true)
         }) {
             HStack {
                 Image(systemName: "location.fill")
@@ -443,6 +443,13 @@ struct ContentView: View {
                     Text(error)
                         .foregroundColor(.white.opacity(0.8))
                         .multilineTextAlignment(.center)
+
+                    if viewModel.shouldOfferLocationSettingsShortcut {
+                        Button("Open Location Settings") {
+                            viewModel.openLocationServicesSettings()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
                 }
                 .padding()
             } else {

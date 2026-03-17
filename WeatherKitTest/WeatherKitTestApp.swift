@@ -1,113 +1,191 @@
 import SwiftUI
-import WeatherKit
-import CoreLocation
-import Combine
-import MapKit
 import AppKit
 import Sparkle
+import WeatherKit
 
 // MARK: - App Entry Point
 
 @main
 struct WeatherApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
+    private let sharedObjects = SharedAppObjects.shared
+
     var body: some Scene {
-        // Empty scene - we're using a status bar app
+        Window("Weather", id: WeatherSceneIDs.mainWindow) {
+            MainWeatherWindowView(viewModel: sharedObjects.weatherViewModel)
+                .environmentObject(sharedObjects.appVisibility)
+                .environmentObject(sharedObjects.shellState)
+                .frame(
+                    minWidth: WeatherDesignTokens.mainWindowMin.width,
+                    minHeight: WeatherDesignTokens.mainWindowMin.height
+                )
+        }
+        .defaultSize(
+            width: WeatherDesignTokens.mainWindowDefault.width,
+            height: WeatherDesignTokens.mainWindowDefault.height
+        )
+        .defaultLaunchBehavior(.suppressed)
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
+        .commands {
+            WeatherAppCommands(
+                shellState: sharedObjects.shellState,
+                viewModel: sharedObjects.weatherViewModel
+            )
+        }
+
+        Settings {
+            InAppSettingsView(
+                isPresented: .constant(true),
+                viewModel: sharedObjects.weatherViewModel,
+                showsPanelChrome: false,
+                showsCloseButton: false
+            )
+                .environmentObject(sharedObjects.appVisibility)
+                .frame(minWidth: 760, idealWidth: 860, minHeight: 560, idealHeight: 620)
+        }
+        .defaultSize(width: 860, height: 620)
+    }
+}
+
+struct WeatherAppCommands: Commands {
+    let shellState: AppShellState
+    let viewModel: WeatherViewModel
+
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandMenu("Weather") {
+            Button("Show Full Forecast") {
+                shellState.showMainWindow(destination: .overview) {
+                    openWindow(id: WeatherSceneIDs.mainWindow)
+                }
+            }
+            .keyboardShortcut(.return, modifiers: [.command])
+
+            Button("Refresh Weather") {
+                viewModel.manualRefresh()
+            }
+            .keyboardShortcut("r", modifiers: [.command])
+
+            Button("Focus Search") {
+                shellState.showMainWindow(focusSearch: true) {
+                    openWindow(id: WeatherSceneIDs.mainWindow)
+                }
+            }
+            .keyboardShortcut("l", modifiers: [.command])
+
+            Divider()
+
+            Button("Show Overview") {
+                shellState.showMainWindow(destination: .overview) {
+                    openWindow(id: WeatherSceneIDs.mainWindow)
+                }
+            }
+            .keyboardShortcut("1", modifiers: [.command])
+
+            Button("Show Map") {
+                shellState.showMainWindow(destination: .map) {
+                    openWindow(id: WeatherSceneIDs.mainWindow)
+                }
+            }
+            .keyboardShortcut("2", modifiers: [.command])
+
+            Button("Show Alerts") {
+                shellState.showMainWindow(destination: .alerts) {
+                    openWindow(id: WeatherSceneIDs.mainWindow)
+                }
+            }
+            .keyboardShortcut("3", modifiers: [.command])
+        }
     }
 }
 
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var statusItem: NSStatusItem?
-    var popover: NSPopover?
-    var weatherViewModel: WeatherViewModel?
-    private let appVisibility = AppVisibility.shared
+    private let sharedObjects = SharedAppObjects.shared
+    private var statusItem: NSStatusItem?
+    private var popover: NSPopover?
     private var appActiveObservers: [NSObjectProtocol] = []
-    
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
         UpdateManager.shared.start()
 
-        // Drive animation gating (and other UI work) off app focus + popover presentation.
-        // This is important for a menu bar popover app because the SwiftUI view may stay alive
-        // even when the popover is closed, which would otherwise keep animations/timers running.
         let nc = NotificationCenter.default
+        let appVisibility = sharedObjects.appVisibility
+        appVisibility.isAppActive = NSRunningApplication.current.isActive
         appActiveObservers.append(
-            nc.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.appVisibility.isAppActive = true
+            nc.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [self] _ in
+                Task { @MainActor in
+                    appVisibility.isAppActive = true
+                }
+                self.sharedObjects.weatherViewModel.refreshIfNeededAfterForeground()
             }
         )
         appActiveObservers.append(
-            nc.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.appVisibility.isAppActive = false
+            nc.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
+                Task { @MainActor in
+                    appVisibility.isAppActive = false
+                }
             }
         )
 
-        // Create status bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        
+
         if let button = statusItem?.button {
             button.image = NSImage(systemSymbolName: "cloud.sun.fill", accessibilityDescription: "Weather")
             button.action = #selector(togglePopover)
             button.target = self
         }
-        
-        // Initialize weather view model and fetch current location weather
-        weatherViewModel = WeatherViewModel()
-        weatherViewModel?.onWeatherUpdate = { [weak self] weather in
+
+        sharedObjects.weatherViewModel.onWeatherUpdate = { [weak self] weather in
             self?.updateMenuBar(with: weather)
         }
 
         Task {
             await WeatherNotificationManager.shared.requestAuthorization()
         }
-        
-        // Create popover with shared view model
+
         popover = NSPopover()
-        popover?.contentSize = NSSize(width: 500, height: 700)
+        popover?.contentSize = NSSize(
+            width: WeatherDesignTokens.popoverWidth,
+            height: WeatherDesignTokens.popoverHeight
+        )
         popover?.behavior = .transient
         popover?.delegate = self
         popover?.contentViewController = NSHostingController(
-            rootView: ContentView(viewModel: weatherViewModel!)
-                .environmentObject(appVisibility)
+            rootView: QuickStatusPopoverView(viewModel: sharedObjects.weatherViewModel)
+                .environmentObject(sharedObjects.appVisibility)
+                .environmentObject(sharedObjects.shellState)
         )
-        
-        weatherViewModel?.fetchCurrentLocationWeather()
-    }
-    
-    @objc func togglePopover() {
-        if let button = statusItem?.button {
-            if popover?.isShown == true {
-                appVisibility.isPopoverVisible = false
-                popover?.performClose(nil)
-            } else {
-                appVisibility.isPopoverVisible = true
-                popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-                popover?.contentViewController?.view.window?.makeKey()
-            }
-        }
-    }
-    
-    func updateMenuBar(with weather: CurrentWeather) {
-        if let button = statusItem?.button {
-            let useCelsius = UserDefaults.standard.bool(forKey: "useCelsius")
-            let tempMeasurement = weather.temperature
-            let temp : Int
-            
-            if useCelsius {
-                temp = Int(tempMeasurement.converted(to: .celsius).value.rounded())
-            } else {
-                temp = Int(tempMeasurement.converted(to: .fahrenheit).value.rounded())
-            }
-            
-            let symbol = weather.symbolName
 
-            // Set image and title so the menubar shows icon + temperature
-            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Weather")
-            button.imagePosition = .imageLeading
-            button.title = " \(temp)°"
+        sharedObjects.weatherViewModel.fetchCurrentLocationWeather()
+    }
+
+    @objc private func togglePopover() {
+        guard let button = statusItem?.button else { return }
+
+        if popover?.isShown == true {
+            sharedObjects.appVisibility.endPopoverPresentation()
+            popover?.performClose(nil)
+        } else {
+            sharedObjects.appVisibility.beginPopoverPresentation()
+            popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            popover?.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    private func updateMenuBar(with weather: CurrentWeather) {
+        guard let button = statusItem?.button else { return }
+
+        let useCelsius = UserDefaults.standard.bool(forKey: "useCelsius")
+        let unit: UnitTemperature = useCelsius ? .celsius : .fahrenheit
+        let temp = Int(weather.temperature.converted(to: unit).value.rounded())
+
+        button.image = NSImage(systemSymbolName: weather.symbolName, accessibilityDescription: "Weather")
+        button.imagePosition = .imageLeading
+        button.title = " \(temp)°"
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -117,20 +195,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         appActiveObservers.removeAll()
     }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
 }
 
 extension AppDelegate: NSPopoverDelegate {
     func popoverDidShow(_ notification: Notification) {
-        appVisibility.isPopoverVisible = true
+        sharedObjects.appVisibility.isPopoverVisible = true
     }
 
     func popoverDidClose(_ notification: Notification) {
-        appVisibility.isPopoverVisible = false
+        sharedObjects.appVisibility.endPopoverPresentation()
     }
 }
 
 @MainActor
-final class UpdateManager: ObservableObject {
+final class UpdateManager {
     static let shared = UpdateManager()
     private var updaterController: SPUStandardUpdaterController?
 
@@ -138,7 +220,6 @@ final class UpdateManager: ObservableObject {
 
     func start() {
         if updaterController == nil {
-            // Let Sparkle present its own UI/errors. We only preflight the feed URL for clearer 404/401 messaging.
             updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
         }
     }

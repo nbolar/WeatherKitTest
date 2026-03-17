@@ -6,6 +6,7 @@ import WeatherKit
 struct WeatherBackdropView: View {
     let weather: CurrentWeather
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @EnvironmentObject private var appVisibility: AppVisibility
     @AppStorage("energySaverMode") private var energySaverMode: Bool = false
 
@@ -16,24 +17,26 @@ struct WeatherBackdropView: View {
     }
 
     var body: some View {
-        let shouldAnimate = appVisibility.effectsActive && !reduceMotion && !energySaverMode
+        let effectMode = WeatherEffectPolicy.mode(
+            isVisible: appVisibility.effectsActive,
+            reduceMotion: reduceMotion,
+            energySaver: energySaverMode
+        )
         Group {
-            if shouldAnimate {
-                if energySaverMode {
-                    TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { timeline in
-                        let t = timeline.date.timeIntervalSinceReferenceDate
-                        let drift = CGFloat(sin(t * 0.12)) * 0.08
-                        backdrop(drift: drift)
-                    }
-                } else {
-                    TimelineView(.animation) { timeline in
-                        let t = timeline.date.timeIntervalSinceReferenceDate
-                        let drift = CGFloat(sin(t * 0.12)) * 0.08
-                        backdrop(drift: drift)
-                    }
+            if effectMode == .none {
+                backdrop(drift: 0)
+            } else if effectMode == .reduced {
+                TimelineView(.periodic(from: .now, by: WeatherEffectPolicy.reducedTimelineInterval(energySaver: energySaverMode))) { timeline in
+                    let t = timeline.date.timeIntervalSinceReferenceDate
+                    let drift = CGFloat(sin(t * 0.12)) * 0.08
+                    backdrop(drift: drift)
                 }
             } else {
-                backdrop(drift: 0)
+                TimelineView(.animation) { timeline in
+                    let t = timeline.date.timeIntervalSinceReferenceDate
+                    let drift = CGFloat(sin(t * 0.12)) * 0.08
+                    backdrop(drift: drift)
+                }
             }
         }
         .ignoresSafeArea()
@@ -41,7 +44,19 @@ struct WeatherBackdropView: View {
 
     @ViewBuilder
     private func backdrop(drift: CGFloat) -> some View {
+        let effectMode = WeatherEffectPolicy.mode(
+            isVisible: appVisibility.effectsActive,
+            reduceMotion: reduceMotion,
+            energySaver: energySaverMode
+        )
+
         ZStack {
+            LinearGradient(
+                colors: foundationColors,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
             // Base gradient (animated subtly) based on time-of-day + conditions
             LinearGradient(
                 colors: gradientColors,
@@ -61,7 +76,7 @@ struct WeatherBackdropView: View {
             .animation(reduceMotion ? nil : .easeInOut(duration: 1.0), value: styleKey)
 
             // Atmospheric effects (always behind the main content)
-            if appVisibility.effectsActive {
+            if effectMode != .none {
                 weatherEffects
                     .allowsHitTesting(false)
             }
@@ -71,8 +86,8 @@ struct WeatherBackdropView: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color.black.opacity(weather.isDaylight ? 0.05 : 0.28),
-                            Color.black.opacity(weather.isDaylight ? 0.15 : 0.40)
+                            Color.black.opacity(weather.isDaylight ? 0.10 : 0.28),
+                            Color.black.opacity(weather.isDaylight ? 0.22 : 0.40)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -80,7 +95,29 @@ struct WeatherBackdropView: View {
                 )
                 .blendMode(.multiply)
                 .allowsHitTesting(false)
+
+            if reduceTransparency {
+                Rectangle()
+                    .fill(Color.black.opacity(weather.isDaylight ? 0.14 : 0.08))
+                    .allowsHitTesting(false)
+            }
         }
+    }
+
+    private var foundationColors: [Color] {
+        if weather.isDaylight {
+            return [
+                Color(red: 0.08, green: 0.15, blue: 0.28),
+                Color(red: 0.14, green: 0.24, blue: 0.40),
+                Color(red: 0.07, green: 0.12, blue: 0.22)
+            ]
+        }
+
+        return [
+            Color(red: 0.03, green: 0.05, blue: 0.10),
+            Color(red: 0.06, green: 0.08, blue: 0.16),
+            Color(red: 0.02, green: 0.03, blue: 0.07)
+        ]
     }
 
     private var depthColors: [Color] {

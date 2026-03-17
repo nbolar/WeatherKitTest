@@ -25,21 +25,23 @@ struct StarsEffect: View {
     @State private var stars: [Star] = []
 
     var body: some View {
-        let shouldAnimate = appVisibility.effectsActive && !reduceMotion && !energySaverMode
+        let effectMode = WeatherEffectPolicy.mode(
+            isVisible: appVisibility.effectsActive,
+            reduceMotion: reduceMotion,
+            energySaver: energySaverMode
+        )
         Group {
-            if shouldAnimate {
-                if energySaverMode {
-                    TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { timeline in
-                        starsLayer(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
-                    }
-                } else {
-                    TimelineView(.animation) { timeline in
-                        starsLayer(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
-                    }
-                }
-            } else {
+            if effectMode == .none {
                 // Static stars when the app is unfocused/hidden or Reduce Motion is enabled.
                 starsLayer(time: 0, animate: false)
+            } else if effectMode == .reduced {
+                TimelineView(.periodic(from: .now, by: WeatherEffectPolicy.reducedTimelineInterval(energySaver: energySaverMode))) { timeline in
+                    starsLayer(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
+                }
+            } else {
+                TimelineView(.animation) { timeline in
+                    starsLayer(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
+                }
             }
         }
         .onAppear(perform: ensureStars)
@@ -134,6 +136,7 @@ struct NightGlowEffect: View {
 struct ShootingStarsEffect: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("energySaverMode") private var energySaverMode: Bool = false
+    @State private var shootingStarTask: Task<Void, Never>?
     @State private var shootingStars: [ShootingStar] = []
     
     fileprivate struct ShootingStar: Identifiable {
@@ -157,23 +160,33 @@ struct ShootingStarsEffect: View {
         }
         .allowsHitTesting(false)
         .onAppear {
-            guard !reduceMotion, !energySaverMode else { return }
-            scheduleShootingStar()
+            startShootingStarsIfNeeded()
+        }
+        .onDisappear {
+            stopShootingStars()
         }
     }
-    
-    private func scheduleShootingStar() {
-        guard !reduceMotion else { return }
-        
-        // Random delay between shooting stars
-        let delay = energySaverMode ? Double.random(in: 9...22) : Double.random(in: 5...15)
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            createShootingStar()
-            scheduleShootingStar() // Schedule the next one
+
+    private func startShootingStarsIfNeeded() {
+        guard !reduceMotion, !energySaverMode, shootingStarTask == nil else { return }
+
+        shootingStarTask = Task { @MainActor in
+            while !Task.isCancelled {
+                let delay = Double.random(in: 5...15)
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard !Task.isCancelled else { break }
+                createShootingStar()
+            }
         }
     }
+
+    private func stopShootingStars() {
+        shootingStarTask?.cancel()
+        shootingStarTask = nil
+        shootingStars.removeAll()
+    }
     
+    @MainActor
     private func createShootingStar() {
         let newStar = ShootingStar(
             id: UUID(),
@@ -339,6 +352,7 @@ struct FogEffect: View {
 
 struct SunRaysEffect: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("energySaverMode") private var energySaverMode: Bool = false
     @State private var rotation: Double = 0
     @State private var shimmer: Double = 0
     @State private var pulsePhase: Double = 0
@@ -520,7 +534,7 @@ struct SunRaysEffect: View {
             .clipped()
 
             // Enhanced sunlit motes with depth
-            if !reduceMotion {
+            if !reduceMotion && !energySaverMode {
                 SunnyMotesEffect()
                     .opacity(0.35)
                     .blendMode(.screen)
@@ -564,7 +578,7 @@ struct SunRaysEffect: View {
         }
         .allowsHitTesting(false)
         .onAppear {
-            guard !reduceMotion else { return }
+            guard !reduceMotion, !energySaverMode else { return }
             
             // Slow, continuous ray rotation
             withAnimation(.linear(duration: 200).repeatForever(autoreverses: false)) {
@@ -713,20 +727,22 @@ struct MoonRaysEffect: View {
     @State private var secondaryRotation: Double = 0
 
     var body: some View {
-        let shouldAnimate = appVisibility.effectsActive && !reduceMotion && !energySaverMode
+        let effectMode = WeatherEffectPolicy.mode(
+            isVisible: appVisibility.effectsActive,
+            reduceMotion: reduceMotion,
+            energySaver: energySaverMode
+        )
         Group {
-            if shouldAnimate {
-                if energySaverMode {
-                    TimelineView(.periodic(from: .now, by: 1.0 / 30.0)) { timeline in
-                        moonBody(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
-                    }
-                } else {
-                    TimelineView(.animation) { timeline in
-                        moonBody(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
-                    }
+            if effectMode == .none {
+                moonBody(time: 0, animate: false)
+            } else if effectMode == .reduced {
+                TimelineView(.periodic(from: .now, by: WeatherEffectPolicy.reducedTimelineInterval(energySaver: energySaverMode))) { timeline in
+                    moonBody(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
                 }
             } else {
-                moonBody(time: 0, animate: false)
+                TimelineView(.animation) { timeline in
+                    moonBody(time: timeline.date.timeIntervalSinceReferenceDate, animate: true)
+                }
             }
         }
     }
@@ -909,7 +925,7 @@ struct MoonRaysEffect: View {
                 .clipped()
 
                 // Enhanced moonlight motes with depth
-                if !reduceMotion {
+                if !reduceMotion && !energySaverMode {
                     MoonlightMotesEffect()
                         .opacity(0.65)
                         .blendMode(.screen)
@@ -1327,6 +1343,7 @@ struct Snowflake: View {
     @State private var yOffset: CGFloat = -400
     @State private var xDrift: CGFloat = 0
     @State private var rotation: Double = 0
+    @State private var snowfallTask: Task<Void, Never>?
     
     var body: some View {
         ZStack {
@@ -1364,26 +1381,29 @@ struct Snowflake: View {
                 rotation = 360
             }
         }
+        .onDisappear {
+            snowfallTask?.cancel()
+            snowfallTask = nil
+        }
     }
     
     private func startSnowfallAnimation() {
-        // Reset to top
+        snowfallTask?.cancel()
         yOffset = -400
-        
-        // Animate down after initial delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            animateSnowfall()
-        }
-    }
-    
-    private func animateSnowfall() {
-        withAnimation(.linear(duration: speed)) {
-            yOffset = 700
-        }
-        
-        // After animation completes, reset and start again
-        DispatchQueue.main.asyncAfter(deadline: .now() + speed) {
-            startSnowfallAnimation()
+
+        snowfallTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+
+            while !Task.isCancelled {
+                withAnimation(.linear(duration: speed)) {
+                    yOffset = 700
+                }
+
+                try? await Task.sleep(nanoseconds: UInt64(speed * 1_000_000_000))
+                guard !Task.isCancelled else { return }
+                yOffset = -400
+            }
         }
     }
 }

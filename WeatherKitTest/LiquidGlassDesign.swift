@@ -25,31 +25,29 @@ enum LiquidGlassTokens {
 struct LiquidGlassCard: ViewModifier {
     var cornerRadius: CGFloat = LiquidGlassTokens.cardCorner
     @Environment(\.isDaylight) private var isDaylight
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func body(content: Content) -> some View {
         let daylight = isDaylight ?? false
-        let strokeOpacity = daylight ? 0.06 : LiquidGlassTokens.strokeOpacity
-        let innerGlowOpacity = daylight ? 0.04 : LiquidGlassTokens.innerGlowOpacity
-        let shadowOpacity = daylight ? 0.08 : 0.18
-        let shadowRadius: CGFloat = daylight ? 8 : 16
+        let strokeOpacity = reduceTransparency
+            ? (daylight ? 0.14 : 0.18)
+            : (daylight ? 0.10 : LiquidGlassTokens.strokeOpacity)
+        let innerGlowOpacity = daylight ? 0.05 : LiquidGlassTokens.innerGlowOpacity
+        let shadowOpacity = daylight ? 0.14 : 0.20
+        let shadowRadius: CGFloat = daylight ? 14 : 18
+        let material: Material = reduceTransparency ? .regularMaterial : (daylight ? .thinMaterial : .regularMaterial)
+        let materialOpacity = reduceTransparency ? 0.92 : (daylight ? 0.78 : 0.68)
+        let substrateOpacity = reduceTransparency ? (daylight ? 0.44 : 0.38) : (daylight ? 0.28 : 0.22)
 
-        Group {
-            if #available(macOS 26.0, *) {
-                let materialOpacity = daylight ? 0.35 : 0.55
-                content
-                    .background(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(.ultraThinMaterial)
-                            .opacity(materialOpacity)
-                    )
-            } else {
-                content
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            }
-        }
+        content
         .background(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.white.opacity(daylight ? 0.02 : 0.0))
+                .fill(Color.black.opacity(substrateOpacity))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(material)
+                        .opacity(materialOpacity)
+                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)

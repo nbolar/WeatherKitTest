@@ -11,7 +11,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		4ED0CD762F21DBD2007C175D /* WeatherKitTest.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WeatherKitTest.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4ED0CD762F21DBD2007C175D /* WeatherStatus.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WeatherStatus.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -45,7 +45,7 @@
 		4ED0CD772F21DBD2007C175D /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				4ED0CD762F21DBD2007C175D /* WeatherKitTest.app */,
+				4ED0CD762F21DBD2007C175D /* WeatherStatus.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -72,8 +72,8 @@
 			packageProductDependencies = (
 				4E01ED5C2F36820800DD5E24 /* Sparkle */,
 			);
-			productName = WeatherKitTest;
-			productReference = 4ED0CD762F21DBD2007C175D /* WeatherKitTest.app */;
+			productName = WeatherStatus;
+			productReference = 4ED0CD762F21DBD2007C175D /* WeatherStatus.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -288,7 +288,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nikhilbolar.weatherkittest;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = WeatherStatus;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -334,7 +334,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.nikhilbolar.weatherkittest;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = WeatherStatus;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;

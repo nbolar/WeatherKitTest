@@ -1,12 +1,60 @@
 import Foundation
 import SwiftUI
 import Combine
+import AppKit
 import CoreLocation
 import MapKit
 import WeatherKit
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
+
+actor SavedLocationRefreshCoordinator {
+    private var tasks: [UUID: Task<CachedLocationWeather?, Never>] = [:]
+
+    func task(
+        for locationID: UUID,
+        create: @Sendable () -> Task<CachedLocationWeather?, Never>
+    ) -> Task<CachedLocationWeather?, Never> {
+        if let existing = tasks[locationID] {
+            return existing
+        }
+
+        let task = create()
+        tasks[locationID] = task
+        return task
+    }
+
+    func clearTask(for locationID: UUID) {
+        tasks[locationID] = nil
+    }
+}
+
+private struct PersistedCurrentLocation: Codable {
+    let latitude: Double
+    let longitude: Double
+    let timestamp: Date
+    let horizontalAccuracy: CLLocationAccuracy?
+}
+
+enum ActiveLoadPhase: Equatable {
+    case idle
+    case resolvingCurrentLocation
+    case fetchingWeather(isCurrentLocation: Bool)
+
+    var statusMessage: String? {
+        switch self {
+        case .idle:
+            return nil
+        case .resolvingCurrentLocation:
+            return "Finding your current location..."
+        case .fetchingWeather(let isCurrentLocation):
+            return isCurrentLocation
+                ? "Fetching weather for your current location..."
+                : "Fetching weather for this location..."
+        }
+    }
+}
 
 // MARK: - Weather View Model
 
@@ -20,6 +68,8 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     @Published var locationName: String?
     @Published var locationTimeZone: TimeZone?
     @Published var isLoading = false
+    @Published private(set) var isFetchingCurrentLocation = false
+    @Published private(set) var activeLoadPhase: ActiveLoadPhase = .idle
     @Published var errorMessage: String?
     @Published var airQuality: AirQualitySnapshot?
     @Published var airQualityHourly: [AirQualityHourPoint] = []
@@ -32,7 +82,9 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     @Published var isShowingSuggestions: Bool = false
     @Published var savedLocations: [SavedLocation] = []
     @Published var currentLocationIndex: Int? = nil  // nil = showing current location, not a saved location
+    @Published private(set) var locationAuthorizationStatus: CLAuthorizationStatus = .notDetermined
     @Published var lastUpdated: Date? = nil
+    @Published var activeLocationCachedWeather: CachedLocationWeather? = nil
     
     // Cache for weather data of saved locations
     @Published var locationWeatherCache: [UUID: CachedLocationWeather] = [:]
@@ -45,9 +97,27 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     var lastLocation: CLLocation?
     private var activeLocationKey: String?
     private var fetchSequence: Int = 0
+    private var activeWeatherFetchTask: Task<Void, Never>?
+    private var activeWeatherFetchLocationKey: String?
+    private var savedLocationRefreshTask: Task<Void, Never>?
+    private let savedLocationRefreshCoordinator = SavedLocationRefreshCoordinator()
+    private var pendingRefreshAfterCurrentLoad = false
+    private var pendingCurrentLocationRequest = false
+    private var saveWeatherCacheWorkItem: DispatchWorkItem?
+    private var currentLocationTimeoutTask: Task<Void, Never>?
+    private var currentLocationRequestID: UUID?
+    private var weatherFetchTimeoutTask: Task<Void, Never>?
+    private var weatherFetchRequestID: UUID?
 
     private var locationRetryCount: Int = 0
     private let maxLocationRetries: Int = 3
+    private let currentLocationTimeout: TimeInterval = 12
+    private let weatherFetchTimeout: TimeInterval = 18
+    private let fastLocationMaximumAge: TimeInterval = 15 * 60
+    private let fastLocationMaximumAccuracy: CLLocationAccuracy = 20_000
+    private let fallbackLocationMaximumAge: TimeInterval = 12 * 60 * 60
+    private let fallbackLocationMaximumAccuracy: CLLocationAccuracy = 75_000
+    private let persistedCurrentLocationKey = "lastKnownCurrentLocation"
     
     private let weatherService = WeatherService.shared
     private let geocoder = CLGeocoder()
@@ -61,13 +131,85 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         formatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
         return formatter
     }()
+
+    private static func locationKey(for location: CLLocation) -> String {
+        "\(location.coordinate.latitude),\(location.coordinate.longitude)"
+    }
+
+    nonisolated private static func resolveTimeZoneIdentifier(for location: CLLocation) async -> String? {
+        do {
+            let placemarks = try await CLGeocoder().reverseGeocodeLocation(location)
+            return placemarks.first?.timeZone?.identifier
+        } catch {
+            return nil
+        }
+    }
+
+    var loadingStatusMessage: String? {
+        activeLoadPhase.statusMessage
+    }
+
+    var shouldPromoteWindowForLocationAuthorization: Bool {
+#if os(macOS)
+        return locationAuthorizationStatus == .notDetermined
+#else
+        return false
+#endif
+    }
+
+    var shouldOfferLocationSettingsShortcut: Bool {
+        guard errorMessage != nil else { return false }
+
+        switch locationAuthorizationStatus {
+        case .notDetermined, .denied, .restricted:
+            return true
+        default:
+            return false
+        }
+    }
+
+    func openLocationServicesSettings() {
+#if os(macOS)
+        let candidates = [
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocationServices",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices",
+            "x-apple.systempreferences:com.apple.preference.security"
+        ]
+
+        for candidate in candidates {
+            guard let url = URL(string: candidate) else { continue }
+            if NSWorkspace.shared.open(url) {
+                break
+            }
+        }
+#endif
+    }
+
+    private func currentLocationAuthorizationStatus() -> CLAuthorizationStatus {
+        let status = locationManager.authorizationStatus
+        syncLocationAuthorizationStatus(status)
+        return status
+    }
+
+    private func syncLocationAuthorizationStatus(_ status: CLAuthorizationStatus) {
+        let updateState = {
+            guard self.locationAuthorizationStatus != status else { return }
+            self.locationAuthorizationStatus = status
+        }
+
+        if Thread.isMainThread {
+            updateState()
+        } else {
+            DispatchQueue.main.sync(execute: updateState)
+        }
+    }
     
     override init() {
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
         locationManager.distanceFilter = kCLDistanceFilterNone
-        locationManager.requestWhenInUseAuthorization()
+        syncLocationAuthorizationStatus(locationManager.authorizationStatus)
         
         loadSavedLocations()
         
@@ -80,6 +222,7 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         scheduleRefreshTimer()
         
         NotificationCenter.default.addObserver(self, selector: #selector(handleUserDefaultsChanged), name: UserDefaults.didChangeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(handleApplicationDidBecomeActive), name: NSApplication.didBecomeActiveNotification, object: nil)
         
         searchCompleter.delegate = self
         searchCompleter.resultTypes = [.address]
@@ -95,6 +238,12 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     deinit {
         NotificationCenter.default.removeObserver(self)
         refreshTimer?.cancel()
+        activeWeatherFetchTask?.cancel()
+        savedLocationRefreshTask?.cancel()
+        currentLocationTimeoutTask?.cancel()
+        weatherFetchTimeoutTask?.cancel()
+        saveWeatherCache(immediate: true)
+        saveWeatherCacheWorkItem?.cancel()
     }
     
     // MARK: - Suggestions control
@@ -106,14 +255,16 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     }
     
     func searchCity() {
-        guard !cityName.isEmpty else { return }
+        let trimmedQuery = cityName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else { return }
+        cityName = trimmedQuery
         isShowingSuggestions = false
         searchSuggestions = []
         
         isLoading = true
         errorMessage = nil
         
-        geocoder.geocodeAddressString(cityName) { [weak self] placemarks, error in
+        geocoder.geocodeAddressString(trimmedQuery) { [weak self] placemarks, error in
             guard let self = self else { return }
             
             if let error = error {
@@ -132,8 +283,11 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 return
             }
             
-            self.locationName = placemarks?.first?.locality ?? self.cityName
-            self.fetchWeather(for: location)
+            let placemark = placemarks?.first
+            let resolvedName = placemark?.locality ?? placemark?.name ?? trimmedQuery
+            DispatchQueue.main.async {
+                self.activateResolvedSearchLocation(named: resolvedName, location: location)
+            }
         }
     }
 
@@ -167,10 +321,8 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 let location = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
                 let name = item.placemark.locality ?? item.name ?? suggestion.title
                 DispatchQueue.main.async {
-                    self.locationName = name
-                    self.addSavedLocation(name: name, location: location)
+                    self.activateResolvedSearchLocation(named: name, location: location)
                 }
-                self.fetchWeather(for: location)
             } else {
                 DispatchQueue.main.async {
                     self.isLoading = false
@@ -184,6 +336,11 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     
     func completerDidUpdateResults(_ completer: MKLocalSearchCompleter) {
         DispatchQueue.main.async {
+            guard !completer.queryFragment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                self.searchSuggestions = []
+                self.isShowingSuggestions = false
+                return
+            }
             self.searchSuggestions = completer.results
             self.isShowingSuggestions = !completer.results.isEmpty
         }
@@ -198,40 +355,286 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     
     // MARK: - Location Fetching
     
-    func fetchCurrentLocationWeather() {
-        DispatchQueue.main.async {
-            self.isLoading = true
-            self.errorMessage = nil
-            self.currentLocationIndex = nil  // Reset to indicate we're viewing current location, not a saved one
-        }
-
+    func fetchCurrentLocationWeather(userInitiated: Bool = false) {
+        guard !isFetchingCurrentLocation else { return }
         guard CLLocationManager.locationServicesEnabled() else {
-            DispatchQueue.main.async {
-                self.isLoading = false
-                self.errorMessage = "Location Services are turned off system-wide. Enable them in System Settings > Privacy & Security > Location Services."
-            }
+            finishCurrentLocationLookup(
+                errorMessage: "Location Services are turned off system-wide. Enable them in System Settings > Privacy & Security > Location Services."
+            )
             return
         }
 
-        let status = locationManager.authorizationStatus
+        let status = currentLocationAuthorizationStatus()
         switch status {
         case .authorizedAlways, .authorizedWhenInUse:
-            self.locationRetryCount = 0
-            locationManager.requestLocation()
-            locationManager.startUpdatingLocation()
-        case .notDetermined:
-            locationManager.requestWhenInUseAuthorization()
-        case .denied, .restricted:
-            DispatchQueue.main.async {
-                self.isLoading = false
-                self.errorMessage = "Cannot access current location. Check app permissions in System Settings > Privacy & Security > Location Services."
+            startCurrentLocationLookup()
+            if let fastLocation = bestAvailableImmediateLocation() {
+                finishCurrentLocationLookup()
+                presentResolvedCurrentLocation(fastLocation)
+                return
             }
+            beginTimedCurrentLocationLookup()
+            requestSingleCurrentLocationUpdate()
+        case .notDetermined:
+            guard userInitiated else {
+                if let fastLocation = bestAvailableImmediateLocation() {
+                    presentResolvedCurrentLocation(fastLocation)
+                }
+                return
+            }
+
+            startCurrentLocationLookup()
+            if userInitiated {
+                NSApp.activate(ignoringOtherApps: true)
+            }
+#if os(macOS)
+            beginTimedCurrentLocationLookup()
+            requestSingleCurrentLocationUpdate()
+#else
+            locationManager.requestWhenInUseAuthorization()
+#endif
+        case .denied, .restricted:
+            finishCurrentLocationLookup(
+                errorMessage: "Cannot access current location. Check app permissions in System Settings > Privacy & Security > Location Services."
+            )
         @unknown default:
-            DispatchQueue.main.async {
-                self.isLoading = false
-                self.errorMessage = "Unknown location authorization status."
+            finishCurrentLocationLookup(errorMessage: "Unknown location authorization status.")
+        }
+    }
+
+    private func startCurrentLocationLookup() {
+        currentLocationTimeoutTask?.cancel()
+        currentLocationTimeoutTask = nil
+        currentLocationRequestID = nil
+        pendingCurrentLocationRequest = true
+        locationRetryCount = 0
+        applyCurrentLocationLoadingState(isLoading: true, isFetchingCurrentLocation: true, errorMessage: nil)
+    }
+
+    private func beginTimedCurrentLocationLookup() {
+        currentLocationTimeoutTask?.cancel()
+        currentLocationRequestID = UUID()
+        let requestID = currentLocationRequestID
+        currentLocationTimeoutTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(nanoseconds: UInt64(currentLocationTimeout * 1_000_000_000))
+            } catch {
+                return
+            }
+
+            await MainActor.run {
+                guard self.pendingCurrentLocationRequest,
+                      self.currentLocationRequestID == requestID else {
+                    return
+                }
+
+                self.locationManager.stopUpdatingLocation()
+                self.finishCurrentLocationLookup(
+                    errorMessage: self.locationAuthorizationStatus == .notDetermined
+                        ? "Location permission is still pending. If you did not see a prompt, check System Settings > Privacy & Security > Location Services."
+                        : "Couldn't determine your current location in time. Showing your existing forecast instead."
+                )
             }
         }
+    }
+
+    private func requestSingleCurrentLocationUpdate() {
+        locationManager.startUpdatingLocation()
+        locationManager.requestLocation()
+    }
+
+    private func finishCurrentLocationLookup(errorMessage: String? = nil) {
+        currentLocationTimeoutTask?.cancel()
+        currentLocationTimeoutTask = nil
+        currentLocationRequestID = nil
+        pendingCurrentLocationRequest = false
+        locationRetryCount = 0
+        locationManager.stopUpdatingLocation()
+        applyCurrentLocationLoadingState(
+            isLoading: false,
+            isFetchingCurrentLocation: false,
+            errorMessage: errorMessage
+        )
+    }
+
+    private func applyCurrentLocationLoadingState(
+        isLoading: Bool,
+        isFetchingCurrentLocation: Bool,
+        errorMessage: String?
+    ) {
+        let phase: ActiveLoadPhase = isFetchingCurrentLocation ? .resolvingCurrentLocation : .idle
+        applyLoadingState(isLoading: isLoading, phase: phase, errorMessage: errorMessage)
+    }
+
+    private func applyWeatherLoadingState(
+        isLoading: Bool,
+        isCurrentLocation: Bool,
+        errorMessage: String?
+    ) {
+        let phase: ActiveLoadPhase = isLoading ? .fetchingWeather(isCurrentLocation: isCurrentLocation) : .idle
+        applyLoadingState(isLoading: isLoading, phase: phase, errorMessage: errorMessage)
+    }
+
+    private func applyLoadingState(
+        isLoading: Bool,
+        phase: ActiveLoadPhase,
+        errorMessage: String?
+    ) {
+        let updateState = {
+            self.isLoading = isLoading
+            self.isFetchingCurrentLocation = phase == .resolvingCurrentLocation
+            self.activeLoadPhase = phase
+            self.errorMessage = errorMessage
+        }
+
+        if Thread.isMainThread {
+            updateState()
+        } else {
+            DispatchQueue.main.sync(execute: updateState)
+        }
+    }
+
+    private func beginTimedWeatherFetch(
+        requestSequence: Int,
+        locationKey: String,
+        isCurrentLocation: Bool
+    ) -> UUID {
+        weatherFetchTimeoutTask?.cancel()
+        let requestID = UUID()
+        weatherFetchRequestID = requestID
+        weatherFetchTimeoutTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await Task.sleep(nanoseconds: UInt64(weatherFetchTimeout * 1_000_000_000))
+            } catch {
+                return
+            }
+
+            await MainActor.run {
+                guard self.weatherFetchRequestID == requestID,
+                      self.fetchSequence == requestSequence,
+                      self.activeLocationKey == locationKey,
+                      self.activeWeatherFetchLocationKey == locationKey,
+                      self.isLoading else {
+                    return
+                }
+
+                self.activeWeatherFetchTask?.cancel()
+                self.activeWeatherFetchTask = nil
+                self.activeWeatherFetchLocationKey = nil
+                self.finishTimedWeatherFetch(requestID: requestID)
+                self.applyWeatherLoadingState(
+                    isLoading: false,
+                    isCurrentLocation: isCurrentLocation,
+                    errorMessage: isCurrentLocation
+                        ? "Found your location, but weather data took too long to load."
+                        : "Weather data for this location took too long to load."
+                )
+                self.performDeferredRefreshIfNeeded()
+            }
+        }
+        return requestID
+    }
+
+    private func finishTimedWeatherFetch(requestID: UUID) {
+        guard weatherFetchRequestID == requestID else { return }
+        weatherFetchTimeoutTask?.cancel()
+        weatherFetchTimeoutTask = nil
+        weatherFetchRequestID = nil
+    }
+
+    private func bestAvailableImmediateLocation() -> CLLocation? {
+        let candidates = [lastLocation, locationManager.location, persistedCurrentLocation()].compactMap { $0 }
+
+        return candidates
+            .filter(isUsableFallbackLocation(_:))
+            .sorted { lhs, rhs in
+                let lhsPreferred = isUsableImmediateLocation(lhs)
+                let rhsPreferred = isUsableImmediateLocation(rhs)
+
+                if lhsPreferred != rhsPreferred {
+                    return lhsPreferred && !rhsPreferred
+                }
+
+                let lhsAge = abs(lhs.timestamp.timeIntervalSinceNow)
+                let rhsAge = abs(rhs.timestamp.timeIntervalSinceNow)
+                if lhsAge != rhsAge {
+                    return lhsAge < rhsAge
+                }
+
+                return lhs.horizontalAccuracy < rhs.horizontalAccuracy
+            }
+            .first
+    }
+
+    private func isUsableImmediateLocation(_ location: CLLocation) -> Bool {
+        guard location.horizontalAccuracy >= 0,
+              location.horizontalAccuracy <= fastLocationMaximumAccuracy else {
+            return false
+        }
+
+        return abs(location.timestamp.timeIntervalSinceNow) <= fastLocationMaximumAge
+    }
+
+    private func isUsableFallbackLocation(_ location: CLLocation) -> Bool {
+        guard location.horizontalAccuracy >= 0,
+              location.horizontalAccuracy <= fallbackLocationMaximumAccuracy else {
+            return false
+        }
+
+        return abs(location.timestamp.timeIntervalSinceNow) <= fallbackLocationMaximumAge
+    }
+
+    private func presentResolvedCurrentLocation(_ location: CLLocation) {
+        persistCurrentLocation(location)
+        currentLocationIndex = nil
+        beginLocationTransition(
+            locationName: "Current Location",
+            timeZone: nil,
+            cachedWeather: nil
+        )
+
+        searchCompleter.region = MKCoordinateRegion(
+            center: location.coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 8, longitudeDelta: 8)
+        )
+
+        geocoder.reverseGeocodeLocation(location) { [weak self] placemarks, _ in
+            if let locality = placemarks?.first?.locality {
+                DispatchQueue.main.async { self?.locationName = locality }
+            }
+        }
+
+        fetchWeather(for: location)
+    }
+
+    private func persistCurrentLocation(_ location: CLLocation) {
+        let persisted = PersistedCurrentLocation(
+            latitude: location.coordinate.latitude,
+            longitude: location.coordinate.longitude,
+            timestamp: location.timestamp,
+            horizontalAccuracy: location.horizontalAccuracy >= 0 ? location.horizontalAccuracy : nil
+        )
+
+        if let encoded = try? JSONEncoder().encode(persisted) {
+            UserDefaults.standard.set(encoded, forKey: persistedCurrentLocationKey)
+        }
+    }
+
+    private func persistedCurrentLocation() -> CLLocation? {
+        guard let data = UserDefaults.standard.data(forKey: persistedCurrentLocationKey),
+              let persisted = try? JSONDecoder().decode(PersistedCurrentLocation.self, from: data) else {
+            return nil
+        }
+
+        return CLLocation(
+            coordinate: CLLocationCoordinate2D(latitude: persisted.latitude, longitude: persisted.longitude),
+            altitude: 0,
+            horizontalAccuracy: persisted.horizontalAccuracy ?? fallbackLocationMaximumAccuracy,
+            verticalAccuracy: -1,
+            timestamp: persisted.timestamp
+        )
     }
     
     // MARK: - Refresh Timer
@@ -249,10 +652,15 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     }
 
     private func refreshNow() {
-        if isLoading { return }
+        if isLoading {
+            pendingRefreshAfterCurrentLoad = true
+            return
+        }
+
+        let activeSavedLocationID = currentSelectedSavedLocationID
         
         // Refresh all saved locations in the background
-        refreshAllSavedLocations()
+        refreshAllSavedLocations(force: false, excluding: activeSavedLocationID)
         
         // If we're viewing a saved location, refresh that location's weather
         if let currentIndex = currentLocationIndex, currentIndex < savedLocations.count {
@@ -267,36 +675,103 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         }
     }
     
-    private func refreshAllSavedLocations() {
-        // Refresh weather for all saved locations in the background
-        for location in savedLocations {
+    private var savedLocationRefreshMinimumAge: TimeInterval {
+        let halfInterval = TimeInterval(refreshIntervalMinutes) * 30.0
+        return min(max(halfInterval, 5 * 60), 20 * 60)
+    }
+
+    private var currentSelectedSavedLocationID: UUID? {
+        guard let currentIndex = currentLocationIndex,
+              savedLocations.indices.contains(currentIndex) else {
+            return nil
+        }
+
+        return savedLocations[currentIndex].id
+    }
+
+    private func shouldRefreshSavedLocation(_ cachedWeather: CachedLocationWeather?, force: Bool) -> Bool {
+        guard !force else { return true }
+        guard let cachedWeather else { return true }
+        if cachedWeather.timeZoneIdentifier == nil {
+            return true
+        }
+        return Date().timeIntervalSince(cachedWeather.date) >= savedLocationRefreshMinimumAge
+    }
+
+    private func refreshAllSavedLocations(force: Bool = false, excluding excludedLocationID: UUID? = nil) {
+        savedLocationRefreshTask?.cancel()
+        let cacheSnapshot = locationWeatherCache
+        let locations = savedLocations.filter { $0.id != excludedLocationID }
+        guard !locations.isEmpty else { return }
+
+        savedLocationRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            let refreshCandidates = locations.filter {
+                self.shouldRefreshSavedLocation(cacheSnapshot[$0.id], force: force)
+            }
+            guard !refreshCandidates.isEmpty else { return }
+
+            var refreshedEntries: [UUID: CachedLocationWeather] = [:]
+
+            await withTaskGroup(of: (UUID, CachedLocationWeather?).self) { group in
+                for location in refreshCandidates {
+                    group.addTask { [weak self] in
+                        guard let self else { return (location.id, nil) }
+                        let cached = await self.refreshSavedLocation(location, force: force)
+                        return (location.id, cached)
+                    }
+                }
+
+                for await (locationID, cached) in group {
+                    if let cached {
+                        refreshedEntries[locationID] = cached
+                    }
+                }
+            }
+
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                self.mergeLocationWeatherCache(refreshedEntries)
+            }
+        }
+    }
+
+    private func refreshSavedLocation(_ location: SavedLocation, force: Bool) async -> CachedLocationWeather? {
+        let cacheSnapshot = await MainActor.run { self.locationWeatherCache[location.id] }
+        guard shouldRefreshSavedLocation(cacheSnapshot, force: force) else {
+            return cacheSnapshot
+        }
+
+        let task = await savedLocationRefreshCoordinator.task(for: location.id) { [weatherService] in
             Task {
                 do {
                     async let weather = weatherService.weather(for: location.clLocation)
                     async let daily = weatherService.weather(for: location.clLocation, including: .daily)
+                    async let timeZoneIdentifier = Self.resolveTimeZoneIdentifier(for: location.clLocation)
                     let weatherResult = try await weather
                     let dailyResult = try await daily
-                    let cachedWeather = CachedLocationWeather(
+                    return CachedLocationWeather(
                         locationId: location.id,
                         weather: weatherResult.currentWeather,
-                        daily: dailyResult.first
+                        daily: dailyResult.first,
+                        timeZoneIdentifier: await timeZoneIdentifier
                     )
-                    
-                    DispatchQueue.main.async {
-                        self.locationWeatherCache[location.id] = cachedWeather
-                        self.saveWeatherCache()
-                    }
                 } catch {
-                    // Silently fail for background refreshes - we don't want to show errors for locations not currently being viewed
                     print("Failed to refresh weather for \(location.name): \(error.localizedDescription)")
+                    return nil
                 }
             }
         }
+
+        let refreshedCache = await task.value
+        await savedLocationRefreshCoordinator.clearTask(for: location.id)
+        return refreshedCache
     }
     
     func refreshCurrentWeather() {
+        objectWillChange.send()
         if let weather = currentWeather { onWeatherUpdate?(weather) }
-        DispatchQueue.main.async { self.lastUpdated = Date() }
     }
 
     @objc private func handleUserDefaultsChanged() {
@@ -307,21 +782,30 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         }
         if let weather = currentWeather { onWeatherUpdate?(weather) }
     }
+
+    @objc private func handleApplicationDidBecomeActive() {
+        syncLocationAuthorizationStatus(locationManager.authorizationStatus)
+    }
     
     // MARK: - CLLocationManagerDelegate
     
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
+        syncLocationAuthorizationStatus(status)
         switch status {
         case .authorizedAlways, .authorizedWhenInUse:
-            self.locationRetryCount = 0
-            manager.requestLocation()
-            manager.startUpdatingLocation()
-        case .denied, .restricted:
-            DispatchQueue.main.async {
-                self.isLoading = false
-                self.errorMessage = "Location access denied. Please enable location services."
+            guard pendingCurrentLocationRequest else { return }
+            guard currentLocationRequestID == nil else { return }
+            locationRetryCount = 0
+            if let fastLocation = bestAvailableImmediateLocation() {
+                finishCurrentLocationLookup()
+                presentResolvedCurrentLocation(fastLocation)
+                return
             }
+            beginTimedCurrentLocationLookup()
+            requestSingleCurrentLocationUpdate()
+        case .denied, .restricted:
+            finishCurrentLocationLookup(errorMessage: "Location access denied. Please enable location services.")
         case .notDetermined:
             break
         @unknown default:
@@ -330,51 +814,46 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard pendingCurrentLocationRequest else { return }
         guard let location = locations.last else { return }
         manager.stopUpdatingLocation()
-        self.locationRetryCount = 0
-
-        searchCompleter.region = MKCoordinateRegion(
-            center: location.coordinate,
-            span: MKCoordinateSpan(latitudeDelta: 8, longitudeDelta: 8)
-        )
-
-        geocoder.reverseGeocodeLocation(location) { [weak self] placemarks, _ in
-            if let locality = placemarks?.first?.locality {
-                DispatchQueue.main.async { self?.locationName = locality }
-            }
-        }
-
-        fetchWeather(for: location)
+        finishCurrentLocationLookup()
+        presentResolvedCurrentLocation(location)
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        guard pendingCurrentLocationRequest else { return }
         let nsError = error as NSError
         if nsError.domain == kCLErrorDomain && nsError.code == CLError.locationUnknown.rawValue {
             if locationRetryCount < maxLocationRetries {
                 locationRetryCount += 1
                 let delay = pow(2.0, Double(locationRetryCount - 1))
-                DispatchQueue.main.async {
-                    self.isLoading = true
-                    self.errorMessage = "Determining your location…"
-                }
+                applyCurrentLocationLoadingState(
+                    isLoading: true,
+                    isFetchingCurrentLocation: true,
+                    errorMessage: nil
+                )
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    guard self.pendingCurrentLocationRequest else { return }
+                    self.locationManager.startUpdatingLocation()
                     manager.requestLocation()
-                    manager.startUpdatingLocation()
                 }
                 return
             }
         }
 
-        DispatchQueue.main.async {
-            self.isLoading = false
-            if nsError.domain == kCLErrorDomain && nsError.code == CLError.denied.rawValue {
-                self.errorMessage = "Location permission denied. Enable it in System Settings > Privacy & Security > Location Services."
-            } else if nsError.domain == kCLErrorDomain && nsError.code == CLError.locationUnknown.rawValue {
-                self.errorMessage = "Still couldn't determine your location. Try moving outdoors, turning on Wi‑Fi, or checking Location Services."
-            } else {
-                self.errorMessage = "Failed to get current location: \(error.localizedDescription). Try moving outdoors or checking Location Services."
-            }
+        if nsError.domain == kCLErrorDomain && nsError.code == CLError.denied.rawValue {
+            finishCurrentLocationLookup(
+                errorMessage: "Location permission denied. Enable it in System Settings > Privacy & Security > Location Services."
+            )
+        } else if nsError.domain == kCLErrorDomain && nsError.code == CLError.locationUnknown.rawValue {
+            finishCurrentLocationLookup(
+                errorMessage: "Still couldn't determine your location. Showing your existing forecast instead."
+            )
+        } else {
+            finishCurrentLocationLookup(
+                errorMessage: "Failed to get current location: \(error.localizedDescription). Showing your existing forecast instead."
+            )
         }
     }
     
@@ -401,10 +880,57 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         }
     }
     
-    private func saveWeatherCache() {
-        if let encoded = try? JSONEncoder().encode(locationWeatherCache) {
-            UserDefaults.standard.set(encoded, forKey: "locationWeatherCache")
+    private func saveWeatherCache(immediate: Bool = false) {
+        saveWeatherCacheWorkItem?.cancel()
+
+        let persist = { [weak self] in
+            guard let self else { return }
+            if let encoded = try? JSONEncoder().encode(self.locationWeatherCache) {
+                UserDefaults.standard.set(encoded, forKey: "locationWeatherCache")
+            }
         }
+
+        if immediate {
+            persist()
+            return
+        }
+
+        let workItem = DispatchWorkItem(block: persist)
+        saveWeatherCacheWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: workItem)
+    }
+
+    private func mergeLocationWeatherCache(_ newEntries: [UUID: CachedLocationWeather]) {
+        guard !newEntries.isEmpty else { return }
+
+        var updatedCache = locationWeatherCache
+        var didChange = false
+
+        for (locationID, cachedWeather) in newEntries {
+            if updatedCache[locationID] != cachedWeather {
+                updatedCache[locationID] = cachedWeather
+                didChange = true
+            }
+        }
+
+        guard didChange else { return }
+        locationWeatherCache = updatedCache
+        saveWeatherCache()
+    }
+
+    private func updateCachedWeather(
+        for savedLocation: SavedLocation,
+        weather: CurrentWeather,
+        daily: DayWeather?,
+        timeZoneIdentifier: String? = nil
+    ) {
+        let cachedWeather = CachedLocationWeather(
+            locationId: savedLocation.id,
+            weather: weather,
+            daily: daily,
+            timeZoneIdentifier: timeZoneIdentifier ?? locationWeatherCache[savedLocation.id]?.timeZoneIdentifier
+        )
+        mergeLocationWeatherCache([savedLocation.id: cachedWeather])
     }
     
     func getCachedWeather(for locationId: UUID) -> CachedLocationWeather? {
@@ -427,28 +953,62 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     }
     
     func removeSavedLocation(at indexSet: IndexSet) {
-        savedLocations.remove(atOffsets: indexSet)
-        if let currentIndex = currentLocationIndex, currentIndex >= savedLocations.count {
+        let validOffsets = IndexSet(indexSet.filter { savedLocations.indices.contains($0) })
+        guard !validOffsets.isEmpty else { return }
+
+        let selectedLocationID = currentLocationIndex.flatMap { index in
+            savedLocations.indices.contains(index) ? savedLocations[index].id : nil
+        }
+        let removedIDs: [UUID] = validOffsets.map { savedLocations[$0].id }
+        let removedSelectedLocation = selectedLocationID.map(removedIDs.contains) ?? false
+        let anchorIndex = validOffsets.min() ?? 0
+
+        savedLocations.remove(atOffsets: validOffsets)
+        for removedID in removedIDs {
+            locationWeatherCache.removeValue(forKey: removedID)
+        }
+
+        if let selectedLocationID, !removedSelectedLocation {
+            currentLocationIndex = savedLocations.firstIndex(where: { $0.id == selectedLocationID })
+        } else if removedSelectedLocation {
+            if savedLocations.indices.contains(anchorIndex) {
+                selectLocation(at: anchorIndex)
+            } else if let fallbackIndex = savedLocations.indices.last {
+                selectLocation(at: fallbackIndex)
+            } else {
+                fetchCurrentLocationWeather()
+            }
+        } else if let currentIndex = currentLocationIndex, currentIndex >= savedLocations.count {
             currentLocationIndex = savedLocations.isEmpty ? nil : max(0, savedLocations.count - 1)
         }
+
         saveSavedLocations()
+        if !removedIDs.isEmpty {
+            saveWeatherCache()
+        }
+    }
+
+    func removeSavedLocation(id: UUID) {
+        guard let index = savedLocations.firstIndex(where: { $0.id == id }) else { return }
+        removeSavedLocation(at: IndexSet(integer: index))
     }
 
     func moveSavedLocation(from source: Int, to destination: Int) {
         guard source != destination,
               source >= 0, source < savedLocations.count,
               destination >= 0, destination <= savedLocations.count else { return }
+
+        let selectedLocationID = currentLocationIndex.flatMap { index in
+            savedLocations.indices.contains(index) ? savedLocations[index].id : nil
+        }
         var locations = savedLocations
         let item = locations.remove(at: source)
         let adjustedDestination = destination > source ? destination - 1 : destination
         locations.insert(item, at: adjustedDestination)
-        if let currentIndex = currentLocationIndex {
-            let currentLocation = savedLocations[currentIndex]
-            if let newIndex = locations.firstIndex(of: currentLocation) {
-                currentLocationIndex = newIndex
-            }
-        }
         savedLocations = locations
+        if let selectedLocationID {
+            currentLocationIndex = savedLocations.firstIndex(where: { $0.id == selectedLocationID })
+        }
         saveSavedLocations()
     }
     
@@ -456,102 +1016,199 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
         guard index < savedLocations.count else { return }
         currentLocationIndex = index
         let location = savedLocations[index]
-        locationName = location.name
+        let cachedWeather = locationWeatherCache[location.id]
+        beginLocationTransition(
+            locationName: location.name,
+            timeZone: cachedWeather?.timeZone ?? location.timeZone,
+            cachedWeather: cachedWeather
+        )
         fetchWeather(for: location.clLocation)
+    }
+
+    func selectLocation(id: UUID) {
+        guard let index = savedLocations.firstIndex(where: { $0.id == id }) else { return }
+        selectLocation(at: index)
+    }
+
+    private func activateResolvedSearchLocation(named name: String, location: CLLocation) {
+        let resolvedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = resolvedName.isEmpty ? cityName : resolvedName
+        cityName = displayName
+        addSavedLocation(name: displayName, location: location)
+        let selectedSavedLocation = currentLocationIndex.flatMap { index in
+            savedLocations.indices.contains(index) ? savedLocations[index] : nil
+        }
+        let cachedWeather = selectedSavedLocation.flatMap { locationWeatherCache[$0.id] }
+        beginLocationTransition(
+            locationName: displayName,
+            timeZone: cachedWeather?.timeZone ?? selectedSavedLocation?.timeZone,
+            cachedWeather: cachedWeather
+        )
+        fetchWeather(for: location)
+    }
+
+    private func beginLocationTransition(
+        locationName: String,
+        timeZone: TimeZone?,
+        cachedWeather: CachedLocationWeather?
+    ) {
+        self.locationName = locationName
+        self.locationTimeZone = timeZone
+        self.activeLocationCachedWeather = cachedWeather
+        self.currentWeather = nil
+        self.hourlyForecast = []
+        self.dailyForecast = []
+        self.minuteForecast = nil
+        self.weatherAlerts = []
+        self.airQuality = nil
+        self.airQualityHourly = []
+        self.isLoading = true
+        self.errorMessage = nil
+        self.lastUpdated = cachedWeather?.date
+        self.aiSummaryShort = nil
+        self.aiSummaryLong = nil
+        self.aiSummaryStatus = cachedWeather == nil ? "Awaiting data…" : "Refreshing cached forecast…"
     }
     
     // MARK: - Weather Fetching
     
     private func fetchWeather(for location: CLLocation) {
-        Task { [weak self] in
+        let locationKey = Self.locationKey(for: location)
+        let isCurrentLocation = currentLocationIndex == nil
+
+        applyWeatherLoadingState(isLoading: true, isCurrentLocation: isCurrentLocation, errorMessage: nil)
+
+        if activeWeatherFetchLocationKey == locationKey, activeWeatherFetchTask != nil {
+            return
+        }
+
+        activeWeatherFetchTask?.cancel()
+        activeWeatherFetchLocationKey = locationKey
+        activeWeatherFetchTask = Task { [weak self] in
             guard let self else { return }
-            await self.fetchWeatherTask(for: location)
+            await self.fetchWeatherTask(
+                for: location,
+                locationKey: locationKey,
+                isCurrentLocation: isCurrentLocation
+            )
+            await MainActor.run {
+                if self.activeWeatherFetchLocationKey == locationKey {
+                    self.activeWeatherFetchLocationKey = nil
+                    self.activeWeatherFetchTask = nil
+                }
+            }
         }
     }
 
-    private func fetchWeatherTask(for location: CLLocation) async {
+    private func fetchWeatherTask(
+        for location: CLLocation,
+        locationKey: String,
+        isCurrentLocation: Bool
+    ) async {
         self.lastLocation = location
-            let locationKey = "\(location.coordinate.latitude),\(location.coordinate.longitude)"
-            fetchSequence += 1
-            let requestSequence = fetchSequence
-            activeLocationKey = locationKey
-            DispatchQueue.main.async {
-                self.aiSummaryShort = nil
-                self.aiSummaryLong = nil
-                self.aiSummaryStatus = "Awaiting data…"
-            }
-            aiSummaryTask?.cancel()
-            self.searchCompleter.region = MKCoordinateRegion(
-                center: location.coordinate,
-                span: MKCoordinateSpan(latitudeDelta: 8, longitudeDelta: 8)
-            )
-            
-            // Fetch timezone for the location
-            geocoder.reverseGeocodeLocation(location) { placemarks, error in
-                if let timeZone = placemarks?.first?.timeZone {
-                    DispatchQueue.main.async {
-                        self.locationTimeZone = timeZone
-                    }
+        fetchSequence += 1
+        let requestSequence = fetchSequence
+        let weatherRequestID = beginTimedWeatherFetch(
+            requestSequence: requestSequence,
+            locationKey: locationKey,
+            isCurrentLocation: isCurrentLocation
+        )
+        activeLocationKey = locationKey
+        DispatchQueue.main.async {
+            self.aiSummaryShort = nil
+            self.aiSummaryLong = nil
+            self.aiSummaryStatus = "Awaiting data…"
+        }
+        aiSummaryTask?.cancel()
+        self.searchCompleter.region = MKCoordinateRegion(
+            center: location.coordinate,
+            span: MKCoordinateSpan(latitudeDelta: 8, longitudeDelta: 8)
+        )
+
+        geocoder.reverseGeocodeLocation(location) { placemarks, _ in
+            if let timeZone = placemarks?.first?.timeZone {
+                DispatchQueue.main.async {
+                    self.locationTimeZone = timeZone
                 }
             }
-            
-            do {
-                async let airQualityResult = fetchAirQuality(for: location)
-                let weather = try await weatherService.weather(for: location)
-                let hourly = try await weatherService.weather(for: location, including: .hourly)
-                let daily = try await weatherService.weather(for: location, including: .daily)
-                let minute = try? await weatherService.weather(for: location, including: .minute)
-                let alerts: [WeatherAlert]? = try? await weatherService.weather(for: location, including: .alerts)
-                let airQualityValue = await airQualityResult
-                
-                let alertArray: [WeatherAlert] = alerts ?? []
-                
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    guard self.fetchSequence == requestSequence, self.activeLocationKey == locationKey else {
-                        return
-                    }
-                    self.currentWeather = weather.currentWeather
-                    self.hourlyForecast = Array(hourly)
-                    self.dailyForecast = Array(daily)
-                    self.minuteForecast = minute
-                    self.weatherAlerts = alertArray
-                    self.airQuality = airQualityValue.current
-                    self.airQualityHourly = airQualityValue.hourly
-                    self.isLoading = false
-                    self.errorMessage = nil
-                    self.lastUpdated = Date()
-                    self.onWeatherUpdate?(weather.currentWeather)
-                    
-                    // Cache weather data for this location if it's a saved location
-                    if let currentIndex = self.currentLocationIndex, currentIndex < self.savedLocations.count {
-                        let savedLocation = self.savedLocations[currentIndex]
-                        let cachedWeather = CachedLocationWeather(
-                            locationId: savedLocation.id,
-                            weather: weather.currentWeather,
-                            daily: daily.first
-                        )
-                        self.locationWeatherCache[savedLocation.id] = cachedWeather
-                        self.saveWeatherCache()
-                    }
+        }
 
-                    self.generateAISummaryIfAvailable(locationKey: locationKey)
-                    self.scheduleNotificationsIfNeeded(
-                        locationKey: locationKey,
-                        alerts: alertArray,
-                        minuteForecast: minute
+        do {
+            async let airQualityResult = fetchAirQuality(for: location)
+            let weather = try await weatherService.weather(for: location)
+            let hourly = try await weatherService.weather(for: location, including: .hourly)
+            let daily = try await weatherService.weather(for: location, including: .daily)
+            let minute = try? await weatherService.weather(for: location, including: .minute)
+            let alerts: [WeatherAlert]? = try? await weatherService.weather(for: location, including: .alerts)
+            let airQualityValue = await airQualityResult
+
+            let alertArray: [WeatherAlert] = alerts ?? []
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard self.fetchSequence == requestSequence, self.activeLocationKey == locationKey else {
+                    return
+                }
+                self.finishTimedWeatherFetch(requestID: weatherRequestID)
+                self.currentWeather = weather.currentWeather
+                self.hourlyForecast = Array(hourly)
+                self.dailyForecast = Array(daily)
+                self.minuteForecast = minute
+                self.weatherAlerts = alertArray
+                self.airQuality = airQualityValue.current
+                self.airQualityHourly = airQualityValue.hourly
+                self.applyWeatherLoadingState(
+                    isLoading: false,
+                    isCurrentLocation: isCurrentLocation,
+                    errorMessage: nil
+                )
+                self.lastUpdated = Date()
+                self.activeLocationCachedWeather = nil
+                self.onWeatherUpdate?(weather.currentWeather)
+
+                if let currentIndex = self.currentLocationIndex, currentIndex < self.savedLocations.count {
+                    let savedLocation = self.savedLocations[currentIndex]
+                    self.updateCachedWeather(
+                        for: savedLocation,
+                        weather: weather.currentWeather,
+                        daily: daily.first,
+                        timeZoneIdentifier: self.locationTimeZone?.identifier
                     )
                 }
-            } catch {
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    guard self.fetchSequence == requestSequence, self.activeLocationKey == locationKey else {
-                        return
-                    }
-                    self.isLoading = false
-                    self.errorMessage = "Failed to fetch weather: \(error.localizedDescription)"
-                }
+
+                self.generateAISummaryIfAvailable(locationKey: locationKey)
+                self.scheduleNotificationsIfNeeded(
+                    locationKey: locationKey,
+                    alerts: alertArray,
+                    minuteForecast: minute
+                )
+                self.performDeferredRefreshIfNeeded()
             }
+        } catch {
+            finishTimedWeatherFetch(requestID: weatherRequestID)
+            if error is CancellationError {
+                return
+            }
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard self.fetchSequence == requestSequence, self.activeLocationKey == locationKey else {
+                    return
+                }
+                self.applyWeatherLoadingState(
+                    isLoading: false,
+                    isCurrentLocation: isCurrentLocation,
+                    errorMessage: "Failed to fetch weather: \(error.localizedDescription)"
+                )
+                self.performDeferredRefreshIfNeeded()
+            }
+        }
+    }
+
+    private func performDeferredRefreshIfNeeded() {
+        guard pendingRefreshAfterCurrentLoad else { return }
+        pendingRefreshAfterCurrentLoad = false
+        refreshNow()
     }
 
     private func scheduleNotificationsIfNeeded(
@@ -675,9 +1332,15 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
                 let shortLine = lines.first
                 let longLine: String?
                 if lines.count >= 2 {
-                    longLine = lines.dropFirst().joined(separator: " ")
+                    let mergedLongLine = lines.dropFirst().joined(separator: " ")
+                    if let shortLine,
+                       Self.normalizedSummaryComparisonText(mergedLongLine) == Self.normalizedSummaryComparisonText(shortLine) {
+                        longLine = nil
+                    } else {
+                        longLine = mergedLongLine
+                    }
                 } else {
-                    longLine = shortLine
+                    longLine = nil
                 }
 
                 DispatchQueue.main.async {
@@ -707,6 +1370,13 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
             self.aiSummaryStatus = "Apple Intelligence not available in this build."
         }
 #endif
+    }
+
+    nonisolated private static func normalizedSummaryComparisonText(_ text: String) -> String {
+        text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
     }
     
     nonisolated private static func summaryPrompt(
@@ -1124,9 +1794,35 @@ class WeatherViewModel: NSObject, ObservableObject, CLLocationManagerDelegate, M
     
     public func manualRefresh() {
         DispatchQueue.main.async {
-            self.isLoading = true
             self.errorMessage = nil
+            if self.lastLocation != nil {
+                self.isLoading = true
+            }
         }
+        refreshAllSavedLocations(force: true, excluding: currentSelectedSavedLocationID)
+        if let location = lastLocation {
+            fetchWeather(for: location)
+        } else {
+            fetchCurrentLocationWeather()
+        }
+    }
+
+    func refreshIfNeededAfterForeground() {
+        guard !isLoading else { return }
+
+        let staleThreshold = TimeInterval(refreshIntervalMinutes * 60)
+        let now = Date()
+        let activeForecastIsStale = lastUpdated.map { now.timeIntervalSince($0) >= staleThreshold } ?? (lastLocation != nil)
+        let anySavedLocationNeedsRefresh = savedLocations.contains {
+            shouldRefreshSavedLocation(locationWeatherCache[$0.id], force: false)
+        }
+
+        if anySavedLocationNeedsRefresh {
+            refreshAllSavedLocations(force: false, excluding: currentSelectedSavedLocationID)
+        }
+
+        guard activeForecastIsStale else { return }
+
         if let location = lastLocation {
             fetchWeather(for: location)
         } else {

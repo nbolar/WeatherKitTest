@@ -6,6 +6,56 @@ import AppKit
 
 // MARK: - Weather Map View
 
+enum WeatherMapPresentationStyle {
+    case embedded
+    case destination
+
+    var mapHeight: CGFloat {
+        switch self {
+        case .embedded:
+            return 400
+        case .destination:
+            return 520
+        }
+    }
+
+    var horizontalPadding: CGFloat {
+        switch self {
+        case .embedded:
+            return 16
+        case .destination:
+            return 0
+        }
+    }
+
+    var contentSpacing: CGFloat {
+        switch self {
+        case .embedded:
+            return 12
+        case .destination:
+            return 16
+        }
+    }
+
+    var showsInlineInfoPanel: Bool {
+        switch self {
+        case .embedded:
+            return true
+        case .destination:
+            return false
+        }
+    }
+
+    var keepsControlsVisible: Bool {
+        switch self {
+        case .embedded:
+            return false
+        case .destination:
+            return true
+        }
+    }
+}
+
 struct WeatherMapView: View {
     private struct EquatableCoordinate: Equatable {
         let lat: CLLocationDegrees
@@ -13,6 +63,7 @@ struct WeatherMapView: View {
     }
 
     let location: CLLocation?
+    let presentationStyle: WeatherMapPresentationStyle
     @ObservedObject var viewModel: WeatherViewModel
     @State private var region: MKCoordinateRegion
     @State private var mapType: MKMapType = .standard
@@ -34,9 +85,14 @@ struct WeatherMapView: View {
     @State private var legendTask: Task<Void, Never>?
     @State private var isHoveringScheduled = false
     
-    init(location: CLLocation?, viewModel: WeatherViewModel) {
+    init(
+        location: CLLocation?,
+        viewModel: WeatherViewModel,
+        presentationStyle: WeatherMapPresentationStyle = .embedded
+    ) {
         self.location = location
         self.viewModel = viewModel
+        self.presentationStyle = presentationStyle
         
         if let location = location {
             _region = State(initialValue: MKCoordinateRegion(
@@ -52,7 +108,7 @@ struct WeatherMapView: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: presentationStyle.contentSpacing) {
             ZStack(alignment: .topTrailing) {
                 WeatherMapRepresentable(
                     region: $region,
@@ -60,6 +116,7 @@ struct WeatherMapView: View {
                     location: location,
                     weather: viewModel.currentWeather,
                     locationName: viewModel.locationName,
+                    allowsScrollWheelZoom: presentationStyle == .destination,
                     overlayStyle: overlayStyle,
                     overlayOpacity: overlayOpacity,
                     radarPath: radarTemplateBase,
@@ -67,7 +124,7 @@ struct WeatherMapView: View {
                         isOverlayAvailable = available
                     }
                 )
-                .frame(height: 400)
+                .frame(height: presentationStyle.mapHeight)
                 .cornerRadius(12)
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
@@ -75,6 +132,10 @@ struct WeatherMapView: View {
                 )
                 .onHover { hovering in
                     isHoveringMap = hovering
+                    guard !presentationStyle.keepsControlsVisible else {
+                        showControlPill = true
+                        return
+                    }
                     if !isHoveringScheduled {
                         isHoveringScheduled = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
@@ -94,7 +155,7 @@ struct WeatherMapView: View {
                     }
                 }
                 
-                if showControls && (isHoveringMap || isHoveringControls) {
+                if showControls && (presentationStyle.keepsControlsVisible || isHoveringMap || isHoveringControls) {
                     VStack(spacing: 8) {
                         Button(action: {
                             if let location = location {
@@ -203,14 +264,18 @@ struct WeatherMapView: View {
                 .padding(.top, 6)
                 .onHover { hovering in
                     isHoveringControls = hovering
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        showControlPill = hovering || isHoveringMap
+                    if presentationStyle.keepsControlsVisible {
+                        showControlPill = true
+                    } else {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showControlPill = hovering || isHoveringMap
+                        }
                     }
                 }
-                .opacity(showControlPill ? 1 : 0)
+                .opacity(presentationStyle.keepsControlsVisible ? 1 : (showControlPill ? 1 : 0))
                 .animation(.easeInOut(duration: 0.2), value: showControlPill)
             }
-            .padding(.horizontal)
+            .padding(.horizontal, presentationStyle.horizontalPadding)
             .overlay(alignment: .bottomTrailing) {
                 MapScaleView(region: region)
                     .padding(12)
@@ -237,7 +302,7 @@ struct WeatherMapView: View {
                     .frame(maxWidth: 260, alignment: .leading)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 8)
-                    .padding(.top, showControlPill ? 56 : 12)
+                    .padding(.top, (presentationStyle.keepsControlsVisible || showControlPill) ? 56 : 12)
                     .padding(.leading, 14)
                 }
             }
@@ -253,17 +318,17 @@ struct WeatherMapView: View {
                 .padding(8)
                 .background(Color.black.opacity(0.45))
                 .cornerRadius(8)
-                .padding(.horizontal)
+                .padding(.horizontal, presentationStyle.horizontalPadding)
             }
             
-            if let weather = viewModel.currentWeather {
+            if presentationStyle.showsInlineInfoPanel, let weather = viewModel.currentWeather {
                 WeatherMapInfoPanel(weather: weather, location: location)
-                    .padding(.horizontal)
-            } else {
+                    .padding(.horizontal, presentationStyle.horizontalPadding)
+            } else if presentationStyle.showsInlineInfoPanel {
                 Text("No weather data available")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.7))
-                    .padding(.horizontal)
+                    .padding(.horizontal, presentationStyle.horizontalPadding)
             }
         }
         .onChange(of: overlayStyle) { _, _ in
@@ -281,10 +346,14 @@ struct WeatherMapView: View {
             }
         }
         .onAppear {
+            showControlPill = presentationStyle.keepsControlsVisible
             scheduleLegendRefresh()
             if overlayStyle == .radar {
                 scheduleRadarRefresh()
             }
+        }
+        .onDisappear {
+            cancelBackgroundTasks()
         }
     }
 
@@ -292,6 +361,7 @@ struct WeatherMapView: View {
         legendTask?.cancel()
         legendTask = Task {
             try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
             await updateLegend()
         }
     }
@@ -300,11 +370,20 @@ struct WeatherMapView: View {
         radarTask?.cancel()
         radarTask = Task {
             try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
             await updateRadarPath()
         }
     }
+
+    private func cancelBackgroundTasks() {
+        legendTask?.cancel()
+        legendTask = nil
+        radarTask?.cancel()
+        radarTask = nil
+    }
     
     private func updateLegend() async {
+        guard !Task.isCancelled else { return }
         guard overlayStyle.showsLegend else {
             DispatchQueue.main.async {
                 legendRange = nil
@@ -378,6 +457,7 @@ struct WeatherMapView: View {
     }
 
     private func updateRadarPath() async {
+        guard !Task.isCancelled else { return }
         guard overlayStyle == .radar else { return }
         if let lastRadarFetch, Date().timeIntervalSince(lastRadarFetch) < 300, radarPath != nil {
             return
@@ -893,10 +973,14 @@ struct WeatherMapInfoPanel: View {
 
 // MARK: - Non-Scrolling MapView
 class NonScrollingMapView: MKMapView {
+    var allowsScrollWheelZoom = false
+
     override func scrollWheel(with event: NSEvent) {
-        // Pass scroll events to the next responder (the SwiftUI ScrollView)
-        // instead of letting the map zoom
-        nextResponder?.scrollWheel(with: event)
+        if allowsScrollWheelZoom {
+            super.scrollWheel(with: event)
+        } else {
+            nextResponder?.scrollWheel(with: event)
+        }
     }
 }
 
@@ -907,6 +991,7 @@ struct WeatherMapRepresentable: NSViewRepresentable {
     let location: CLLocation?
     let weather: CurrentWeather?
     let locationName: String?
+    let allowsScrollWheelZoom: Bool
     let overlayStyle: WeatherOverlayStyle
     let overlayOpacity: Double
     let radarPath: String?
@@ -915,6 +1000,7 @@ struct WeatherMapRepresentable: NSViewRepresentable {
     func makeNSView(context: Context) -> MKMapView {
         let mapView = NonScrollingMapView()
         mapView.delegate = context.coordinator
+        mapView.allowsScrollWheelZoom = allowsScrollWheelZoom
         mapView.mapType = mapType
         mapView.showsCompass = true
         mapView.showsScale = false
@@ -949,6 +1035,10 @@ struct WeatherMapRepresentable: NSViewRepresentable {
     }
     
     func updateNSView(_ nsView: MKMapView, context: Context) {
+        if let mapView = nsView as? NonScrollingMapView {
+            mapView.allowsScrollWheelZoom = allowsScrollWheelZoom
+        }
+
         if context.coordinator.lastMapType != mapType {
             nsView.mapType = mapType
             context.coordinator.lastMapType = mapType

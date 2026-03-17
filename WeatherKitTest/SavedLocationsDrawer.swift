@@ -515,24 +515,26 @@ private struct MiniWeatherBackdrop: View {
 
     var body: some View {
         GeometryReader { geo in
-            let shouldAnimate = isDaylight && isActive && !reduceMotion && !energySaverMode
+            let effectMode = WeatherEffectPolicy.mode(
+                isVisible: isDaylight && isActive,
+                reduceMotion: reduceMotion,
+                energySaver: energySaverMode
+            )
             Group {
-                if shouldAnimate {
-                    if energySaverMode {
-                        TimelineView(.periodic(from: .now, by: 1.0 / 24.0)) { timeline in
-                            let t = timeline.date.timeIntervalSinceReferenceDate
-                            let drift = CGFloat(sin(t * 0.12)) * 0.08
-                            backdropLayer(drift: drift, size: geo.size)
-                        }
-                    } else {
-                        TimelineView(.animation) { timeline in
-                            let t = timeline.date.timeIntervalSinceReferenceDate
-                            let drift = CGFloat(sin(t * 0.12)) * 0.08
-                            backdropLayer(drift: drift, size: geo.size)
-                        }
+                if effectMode == .none {
+                    backdropLayer(drift: 0, size: geo.size)
+                } else if effectMode == .reduced {
+                    TimelineView(.periodic(from: .now, by: WeatherEffectPolicy.reducedTimelineInterval(energySaver: energySaverMode))) { timeline in
+                        let t = timeline.date.timeIntervalSinceReferenceDate
+                        let drift = CGFloat(sin(t * 0.12)) * 0.08
+                        backdropLayer(drift: drift, size: geo.size)
                     }
                 } else {
-                    backdropLayer(drift: 0, size: geo.size)
+                    TimelineView(.animation) { timeline in
+                        let t = timeline.date.timeIntervalSinceReferenceDate
+                        let drift = CGFloat(sin(t * 0.12)) * 0.08
+                        backdropLayer(drift: drift, size: geo.size)
+                    }
                 }
             }
         }

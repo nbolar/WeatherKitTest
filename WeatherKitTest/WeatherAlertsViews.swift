@@ -19,17 +19,12 @@ extension View {
 
 struct WeatherAlertBanner: View {
     let alert: WeatherAlert
+    let alertTarget: WeatherAlertNavigationTarget
     let alertIndex: Int
     let totalAlerts: Int
-    @State private var isExpanded: Bool = false
+    let isExpanded: Bool
+    let onToggleExpansion: () -> Void
     @State private var isHovering: Bool = false
-    @Namespace private var animation
-
-    init(alert: WeatherAlert, alertIndex: Int = 0, totalAlerts: Int = 1) {
-        self.alert = alert
-        self.alertIndex = alertIndex
-        self.totalAlerts = totalAlerts
-    }
 
     var body: some View {
         bannerContent
@@ -60,12 +55,13 @@ struct WeatherAlertBanner: View {
     private var bannerHeader: some View {
         Button {
             withAnimation(.smooth(duration: 0.35, extraBounce: 0)) {
-                isExpanded.toggle()
+                onToggleExpansion()
             }
         } label: {
             headerContent
         }
         .buttonStyle(.plain)
+        .accessibilityHint(isExpanded ? "Hides alert details" : "Shows alert details")
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 isHovering = hovering
@@ -112,7 +108,7 @@ struct WeatherAlertBanner: View {
                         .foregroundColor(.white.opacity(0.75))
                 }
             }
-            Text(isExpanded ? "Alert details below" : "Tap to view details")
+            Text(isExpanded ? "Alert details below" : "Click to view details")
                 .font(.subheadline)
                 .foregroundColor(.white.opacity(0.8))
         }
@@ -129,11 +125,11 @@ struct WeatherAlertBanner: View {
             title: alert.summary,
             url: alert.detailsURL,
             alertIdentifier: alert.summary,
-            alertID: extractAlertID(from: alert),
+            alertID: alertTarget.alertID,
             alertIndex: alertIndex,
             totalAlerts: totalAlerts
         )
-        .id("alert-detail-\(alertIndex)-\(extractAlertID(from: alert))")
+        .id("alert-detail-\(alertTarget.key)")
         .padding(12)
         .background(detailBackground)
         .overlay(detailBorder)
@@ -142,35 +138,6 @@ struct WeatherAlertBanner: View {
         .padding(.top, 8)
         .padding(.bottom, 12)
         .transition(detailTransition)
-    }
-    
-    // Extract the unique alert ID from the URL or metadata
-    private func extractAlertID(from alert: WeatherAlert) -> String {
-        // Use the alert summary as fallback ID
-        let fallbackID = alert.summary
-        
-        // Parse the URL to extract the specific ID for this alert from the ids parameter
-        guard let components = URLComponents(url: alert.detailsURL, resolvingAgainstBaseURL: false),
-              let idsParam = components.queryItems?.first(where: { $0.name == "ids" })?.value else {
-            print("⚠️ extractAlertID: No ids parameter found in URL, using fallback: '\(fallbackID)'")
-            return fallbackID
-        }
-        
-        // The ids parameter contains comma-separated IDs
-        let allIDs = idsParam.split(separator: ",").map { String($0) }
-        
-        print("📋 extractAlertID: Found \(allIDs.count) IDs in URL for alert '\(fallbackID)' at index \(alertIndex)")
-        print("   IDs: \(allIDs)")
-        
-        // Return the ID at the current alert index if possible, otherwise return fallback ID
-        if alertIndex < allIDs.count {
-            let selectedID = allIDs[alertIndex]
-            print("   ✅ Using ID at index \(alertIndex): '\(selectedID)'")
-            return selectedID
-        }
-        
-        print("   ⚠️ Index \(alertIndex) out of range, using fallback: '\(fallbackID)'")
-        return fallbackID
     }
     
     private var detailTransition: AnyTransition {
@@ -1640,6 +1607,33 @@ struct AlertDetailView: View {
     let alertID: String
     let alertIndex: Int
     let totalAlerts: Int
+
+    private var requestKey: String {
+        [alertID, String(alertIndex), String(totalAlerts), url.absoluteString, title]
+            .joined(separator: "|")
+    }
+
+    var body: some View {
+        AlertDetailContent(
+            title: title,
+            url: url,
+            alertIdentifier: alertIdentifier,
+            alertID: alertID,
+            alertIndex: alertIndex,
+            totalAlerts: totalAlerts
+        )
+        // Recreate the parser-backed subtree whenever the selected alert changes.
+        .id(requestKey)
+    }
+}
+
+private struct AlertDetailContent: View {
+    let title: String
+    let url: URL
+    let alertIdentifier: String
+    let alertID: String
+    let alertIndex: Int
+    let totalAlerts: Int
     @State private var isLoading: Bool = true
     @State private var parsedBlocks: [AlertBlock] = []
 
@@ -1660,17 +1654,32 @@ struct AlertDetailView: View {
             .padding(.bottom, 6)
 
             if parsedBlocks.isEmpty {
-                // Placeholder while parsing
                 VStack(alignment: .leading, spacing: 8) {
                     GlassDivider(opacity: 0.08)
-                    Text("Loading alert details…")
-                        .font(.system(size: ParsedAlertView.Metrics.bodySize))
-                        .foregroundColor(.white.opacity(0.6))
-                        .redacted(reason: .placeholder)
-                    Text("Parsing source page…")
-                        .font(.system(size: ParsedAlertView.Metrics.bodySize))
-                        .foregroundColor(.white.opacity(0.6))
-                        .redacted(reason: .placeholder)
+
+                    if isLoading {
+                        Text("Loading alert details…")
+                            .font(.system(size: ParsedAlertView.Metrics.bodySize))
+                            .foregroundColor(.white.opacity(0.6))
+                            .redacted(reason: .placeholder)
+                        Text("Parsing source page…")
+                            .font(.system(size: ParsedAlertView.Metrics.bodySize))
+                            .foregroundColor(.white.opacity(0.6))
+                            .redacted(reason: .placeholder)
+                    } else {
+                        Text("Detailed parsing was unavailable for this alert.")
+                            .font(.system(size: ParsedAlertView.Metrics.bodySize, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.82))
+                        Text("Open the source page for the full bulletin.")
+                            .font(.system(size: ParsedAlertView.Metrics.bodySize))
+                            .foregroundColor(.white.opacity(0.62))
+
+                        Link(destination: url) {
+                            Label("Open Alert Source", systemImage: "safari")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.92))
+                        }
+                    }
                 }
             } else {
                 ParsedAlertView(blocks: parsedBlocks, isEmbedded: true)
