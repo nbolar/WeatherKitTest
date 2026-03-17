@@ -11,7 +11,7 @@ jobs:
       contents: write
 
     env:
-      APP_NAME: WeatherKitTest
+      APP_NAME: WeatherStatus
       DERIVED_DATA: /tmp/DerivedData
       DIST_DIR: /tmp/dist
 
