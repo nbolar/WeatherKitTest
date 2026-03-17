@@ -68,6 +68,8 @@ final class AppShellState: ObservableObject {
     @Published var pendingOverviewAlertRequest: OverviewAlertNavigationRequest?
     @Published var searchFocusRequest: UUID?
     weak var mainWindow: NSWindow?
+    weak var settingsWindow: NSWindow?
+    private var shouldPresentSettingsWhenAvailable = false
 
     private init() {}
 
@@ -81,6 +83,18 @@ final class AppShellState: ObservableObject {
 
     func registerMainWindow(_ window: NSWindow?) {
         mainWindow = window
+    }
+
+    func registerSettingsWindow(_ window: NSWindow?) {
+        settingsWindow = window
+
+        guard let window else { return }
+
+        if shouldPresentSettingsWhenAvailable {
+            shouldPresentSettingsWhenAvailable = false
+        }
+
+        surfaceSettingsWindow(window)
     }
 
     func presentMainWindow(openIfNeeded: () -> Void) {
@@ -118,9 +132,32 @@ final class AppShellState: ObservableObject {
         presentMainWindow(openIfNeeded: openIfNeeded)
     }
 
+    func prepareForSettingsPresentation() {
+        NSApp.activate(ignoringOtherApps: true)
+
+        if let settingsWindow {
+            surfaceSettingsWindow(settingsWindow)
+            return
+        }
+
+        shouldPresentSettingsWhenAvailable = true
+    }
+
     func consumePendingOverviewAlertRequest(_ request: OverviewAlertNavigationRequest) {
         guard pendingOverviewAlertRequest?.requestID == request.requestID else { return }
         pendingOverviewAlertRequest = nil
+    }
+
+    private func surfaceSettingsWindow(_ window: NSWindow) {
+        NSApp.activate(ignoringOtherApps: true)
+
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
     }
 }
 

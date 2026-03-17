@@ -70,6 +70,7 @@ struct QuickStatusPopoverView: View {
                     },
                     onRefresh: { viewModel.manualRefresh() },
                     openFullForecast: openFullForecast,
+                    prepareSettingsPresentation: { shellState.prepareForSettingsPresentation() },
                     summary: displaySummary,
                     metricChips: displayMetricChips,
                     alertText: alertText,
@@ -378,6 +379,7 @@ private struct PopoverHeroActions: View {
     let onCurrentLocation: () -> Void
     let onRefresh: () -> Void
     let openFullForecast: () -> Void
+    let prepareSettingsPresentation: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
@@ -410,6 +412,11 @@ private struct PopoverHeroActions: View {
                 SettingsLink {
                     Label("Settings", systemImage: "gearshape")
                 }
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        prepareSettingsPresentation()
+                    }
+                )
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
@@ -425,6 +432,7 @@ private struct PopoverCurrentConditionsCard: View {
     let onCurrentLocation: () -> Void
     let onRefresh: () -> Void
     let openFullForecast: () -> Void
+    let prepareSettingsPresentation: () -> Void
     let summary: PopoverWeatherSummary?
     let metricChips: [PopoverMetricChip]
     let alertText: String?
@@ -455,7 +463,8 @@ private struct PopoverCurrentConditionsCard: View {
                     isFetchingCurrentLocation: isFetchingCurrentLocation,
                     onCurrentLocation: onCurrentLocation,
                     onRefresh: onRefresh,
-                    openFullForecast: openFullForecast
+                    openFullForecast: openFullForecast,
+                    prepareSettingsPresentation: prepareSettingsPresentation
                 )
             }
 

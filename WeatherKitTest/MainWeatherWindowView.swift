@@ -81,6 +81,11 @@ struct MainWeatherWindowView: View {
                     SettingsLink {
                         Image(systemName: "gearshape")
                     }
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            shellState.prepareForSettingsPresentation()
+                        }
+                    )
                     .help("Settings")
                 }
             }

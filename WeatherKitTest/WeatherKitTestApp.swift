@@ -41,6 +41,7 @@ struct WeatherApp: App {
                 showsCloseButton: false
             )
                 .environmentObject(sharedObjects.appVisibility)
+                .environmentObject(sharedObjects.shellState)
                 .frame(minWidth: 760, idealWidth: 860, minHeight: 560, idealHeight: 620)
         }
         .defaultSize(width: 860, height: 620)

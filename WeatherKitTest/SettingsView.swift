@@ -158,6 +158,7 @@ struct InAppSettingsView: View {
                 SettingsToolbarBackdrop()
             }
         }
+        .background(SettingsWindowObserver().frame(width: 0, height: 0))
     }
 
     private var overlayPanelLayout: some View {
@@ -586,6 +587,76 @@ struct WeatherSettingsSceneView: View {
             showsPanelChrome: false,
             showsCloseButton: false
         )
+    }
+}
+
+private struct SettingsWindowObserver: NSViewRepresentable {
+    @EnvironmentObject private var shellState: AppShellState
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(shellState: shellState)
+    }
+
+    func makeNSView(context: Context) -> SettingsWindowObservationView {
+        let view = SettingsWindowObservationView()
+        view.onWindowChange = { window in
+            context.coordinator.observe(window: window)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: SettingsWindowObservationView, context: Context) {
+        context.coordinator.shellState = shellState
+        if let window = nsView.window {
+            context.coordinator.observe(window: window)
+        }
+    }
+
+    final class Coordinator: NSObject {
+        weak var shellState: AppShellState?
+        private weak var observedWindow: NSWindow?
+        private var closeObserver: NSObjectProtocol?
+
+        init(shellState: AppShellState) {
+            self.shellState = shellState
+        }
+
+        deinit {
+            if let closeObserver {
+                NotificationCenter.default.removeObserver(closeObserver)
+            }
+        }
+
+        func observe(window: NSWindow?) {
+            guard observedWindow !== window else { return }
+
+            if let closeObserver {
+                NotificationCenter.default.removeObserver(closeObserver)
+                self.closeObserver = nil
+            }
+
+            observedWindow = window
+            shellState?.registerSettingsWindow(window)
+
+            guard let window else { return }
+
+            closeObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                self?.observe(window: nil)
+            }
+        }
+    }
+}
+
+private final class SettingsWindowObservationView: NSView {
+    var onWindowChange: ((NSWindow?) -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onWindowChange?(window)
     }
 }
 
@@ -1101,6 +1172,7 @@ struct SettingsAttributionView: View {
 
 #Preview("Settings Scene") {
     WeatherSettingsSceneView(viewModel: WeatherViewModel())
+        .environmentObject(AppShellState.shared)
 }
 
 #Preview("Settings Overlay") {
